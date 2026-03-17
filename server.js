@@ -30,7 +30,6 @@ app.use(helmet({
   crossOriginResourcePolicy: { policy: "cross-origin" }
 }));
 
-// CORS configuration - Updated for Render
 // CORS configuration - Fixed for Render
 const corsOptions = {
   origin: function (origin, callback) {
@@ -60,7 +59,7 @@ const corsOptions = {
   credentials: true,
   optionsSuccessStatus: 200
 };
-app.use(cors(corsOptions));
+app.use(cors(corsOptions)); // 👈 Only use this ONCE (removed duplicate)
 
 // Add a simple CORS test endpoint
 app.options('/api/test-cors', cors(corsOptions));
@@ -71,7 +70,6 @@ app.get('/api/test-cors', (req, res) => {
     allowed: true
   });
 });
-app.use(cors(corsOptions));
 
 // Compression middleware
 app.use(compression());
@@ -240,6 +238,30 @@ app.use('/api/admin/subjects', subjectRoutes);
 app.use('/api/admin/streams', streamRoutes);
 app.use('/api/admin/assignments', assignmentRoutes);
 app.use('/api/admin/stats', adminStatsRoutes);
+
+// ============================================
+// ROUTE DEBUGGING - Add this to see all registered routes
+// ============================================
+console.log('\n📋 Registered Routes:');
+const listRoutes = (stack, basePath = '') => {
+  stack.forEach((layer) => {
+    if (layer.route) {
+      const methods = Object.keys(layer.route.methods).join(',').toUpperCase();
+      console.log(`   ${methods} ${basePath}${layer.route.path}`);
+    } else if (layer.name === 'router' && layer.handle.stack) {
+      // This is a router middleware - recursively list its routes
+      const routerPath = layer.regexp.source
+        .replace('\\/?(?=\\/|$)', '')
+        .replace(/\\\//g, '/')
+        .replace(/\^/g, '')
+        .replace(/\?/g, '')
+        .replace(/\(\?:\(\[\^\\\/\]\+\?\)\)/g, ':param');
+      listRoutes(layer.handle.stack, basePath + routerPath);
+    }
+  });
+};
+listRoutes(app._router.stack);
+console.log('='.repeat(50));
 
 // Health check endpoint - Important for Render
 app.get('/health', (req, res) => {
