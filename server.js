@@ -31,11 +31,46 @@ app.use(helmet({
 }));
 
 // CORS configuration - Updated for Render
+// CORS configuration - Fixed for Render
 const corsOptions = {
-  origin: process.env.CORS_ORIGIN?.split(',') || ['http://localhost:3000', 'https://eduportal-frontend.vercel.app'],
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps, curl, Postman)
+    if (!origin) {
+      return callback(null, true);
+    }
+    
+    const allowedOrigins = [
+      'http://localhost:3000',
+      'https://eduportal-frontend.vercel.app',
+      ...(process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : [])
+    ];
+    
+    // In development, allow all origins
+    if (process.env.NODE_ENV !== 'production') {
+      return callback(null, true);
+    }
+    
+    if (allowedOrigins.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else {
+      console.log('❌ Blocked origin:', origin);
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   credentials: true,
   optionsSuccessStatus: 200
 };
+app.use(cors(corsOptions));
+
+// Add a simple CORS test endpoint
+app.options('/api/test-cors', cors(corsOptions));
+app.get('/api/test-cors', (req, res) => {
+  res.json({ 
+    message: 'CORS is working!',
+    origin: req.headers.origin,
+    allowed: true
+  });
+});
 app.use(cors(corsOptions));
 
 // Compression middleware
