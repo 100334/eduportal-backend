@@ -76,17 +76,41 @@ app.get('/api/test-cors', (req, res) => {
 // Compression middleware
 app.use(compression());
 
-// Rate limiting - Adjusted for production
-const limiter = rateLimit({
-  windowMs: parseInt(process.env.RATE_LIMIT_WINDOW) || 15 * 60 * 1000,
-  max: parseInt(process.env.RATE_LIMIT_MAX) || 100,
-  message: 'Too many requests from this IP, please try again later.',
+// ============================================
+// UPDATED RATE LIMITING - More lenient for auth
+// ============================================
+// General API rate limiter (stricter)
+const apiLimiter = rateLimit({
+  windowMs: parseInt(process.env.RATE_LIMIT_WINDOW) || 60 * 1000, // 1 minute (reduced from 15 min)
+  max: parseInt(process.env.RATE_LIMIT_MAX) || 200, // Increased from 100 to 200 per minute
+  message: { 
+    success: false,
+    message: 'Too many requests from this IP, please try again later.',
+    code: 'RATE_LIMIT_EXCEEDED'
+  },
   standardHeaders: true,
   legacyHeaders: false,
-  // Skip rate limiting for health checks in production
+  // Skip rate limiting for health checks
   skip: (req) => req.path === '/health' || req.path === '/api/test'
 });
-app.use('/api', limiter);
+
+// Auth rate limiter (more lenient)
+const authLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 50, // 50 login attempts per minute
+  message: { 
+    success: false,
+    message: 'Too many login attempts. Please try again later.',
+    code: 'AUTH_RATE_LIMIT_EXCEEDED'
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req) => req.path === '/api/auth/test'
+});
+
+// Apply rate limiters
+app.use('/api', apiLimiter);
+app.use('/api/auth', authLimiter); // Stricter for auth endpoints
 
 // Body parsing middleware
 app.use(express.json({ limit: '10mb' }));
@@ -108,7 +132,7 @@ console.log('='.repeat(60));
 // Debug: Check if route files exist before importing
 console.log('\n📁 Checking route files...');
 
-// Import routes with error handling - FIXED: auth import now matches your actual filename
+// Import routes with error handling
 let authRoutes, 
     learnerRoutes, 
     reportRoutes, 
@@ -121,13 +145,12 @@ let authRoutes,
     assignmentRoutes,
     adminStatsRoutes;
 
-// Auth routes - IMPORTANT: Your file is named 'auth.js', not 'authRoutes.js'
+// Auth routes
 try {
-  authRoutes = require('./routes/auth');  // Changed from 'authRoutes' to 'auth'
+  authRoutes = require('./routes/auth');
   console.log('✅ Auth routes loaded: ./routes/auth.js');
-  console.log(`   📍 Available auth endpoints:`);
-  // Log the actual routes if available
   if (authRoutes.stack) {
+    console.log(`   📍 Available auth endpoints:`);
     authRoutes.stack.forEach(layer => {
       if (layer.route) {
         const methods = Object.keys(layer.route.methods).join(',').toUpperCase();
@@ -137,9 +160,7 @@ try {
   }
 } catch (error) {
   console.error('❌ Failed to load auth routes:', error.message);
-  console.error('   💡 Make sure the file exists at: ./routes/auth.js');
   authRoutes = express.Router();
-  // Add a test endpoint to verify the fallback is working
   authRoutes.post('/test', (req, res) => {
     res.json({ message: 'Auth fallback route working', received: req.body });
   });
@@ -190,7 +211,7 @@ try {
   adminRoutes = express.Router();
 }
 
-// Class management routes (Forms 1-4)
+// Class management routes
 try {
   classRoutes = require('./routes/classRoutes');
   console.log('✅ Class routes loaded: ./routes/classRoutes.js');
@@ -217,7 +238,7 @@ try {
   streamRoutes = express.Router();
 }
 
-// Assignment routes (teacher-class-subject assignments)
+// Assignment routes
 try {
   assignmentRoutes = require('./routes/assignmentRoutes');
   console.log('✅ Assignment routes loaded: ./routes/assignmentRoutes.js');
@@ -243,7 +264,7 @@ console.log('='.repeat(60));
 // REGISTER ROUTES
 // ============================================
 
-// Public test routes (ALWAYS available)
+// Public test routes (ALWAYS available - no rate limit)
 app.get('/test', (req, res) => {
   res.json({ 
     message: 'Server is running!', 
@@ -252,26 +273,29 @@ app.get('/test', (req, res) => {
   });
 });
 
-app.post('/api/auth/test', (req, res) => {
-  console.log('Test auth endpoint hit:', req.body);
-  res.json({ 
-    success: true, 
-    message: 'Auth test endpoint working',
-    received: req.body,
-    timestamp: new Date().toISOString()
+app.get('/health', (req, res) => {
+  res.status(200).json({ 
+    status: 'OK', 
+    timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV,
+    uptime: process.uptime(),
+    memory: process.memoryUsage(),
+    supabase: process.env.SUPABASE_URL ? '✅ Connected' : '❌ Not configured'
   });
 });
 
-// Public routes - AUTH IS NOW CORRECTLY IMPORTED
+// Auth routes
 app.use('/api/auth', authRoutes);
 console.log('   ✅ /api/auth ->', authRoutes.stack ? `${authRoutes.stack.length} routes` : 'Router mounted');
 
-// Simple test endpoint
-app.use('/api/test', (req, res) => res.json({ 
-  message: 'API test endpoint is working!',
-  path: req.path,
-  method: req.method
-}));
+// Test endpoint
+app.get('/api/test', (req, res) => {
+  res.json({ 
+    success: true,
+    message: 'API test endpoint is working!',
+    timestamp: new Date().toISOString()
+  });
+});
 console.log('   ✅ /api/test registered');
 
 // Teacher/Learner routes
@@ -309,7 +333,7 @@ console.log('   ✅ /api/admin/stats ->', adminStatsRoutes.stack ? `${adminStats
 console.log('='.repeat(60));
 
 // ============================================
-// SAFE ROUTE DEBUGGING
+// ROUTE DEBUGGING
 // ============================================
 console.log('\n📋 Registered Routes Summary:');
 try {
@@ -321,48 +345,14 @@ try {
         const methods = Object.keys(layer.route.methods).join(',').toUpperCase();
         console.log(`      ${methods} ${layer.route.path}`);
         routeCount++;
-      } else if (layer.name === 'router' && layer.regexp) {
-        // This is a router middleware - show its base path
-        const path = layer.regexp.toString()
-          .replace('/\\^?(?:\\/(?:\\(\\?([^\\/)]+)\\))?)?(?:\\/?\\(\\?=\\/?\\|\\/\\))?/g', '')
-          .replace(/\\\//g, '/')
-          .replace(/\(\?:\(\[\^\\\/\]\+\?\)\)/g, '*');
-        console.log(`      📁 Router: ${path}`);
       }
     });
     console.log(`\n   Total routes: ${routeCount}`);
-  } else {
-    console.log('   Router not yet fully initialized');
   }
 } catch (err) {
   console.log('   Could not list routes:', err.message);
 }
 console.log('='.repeat(60));
-
-// Health check endpoint - Important for Render
-app.get('/health', (req, res) => {
-  res.status(200).json({ 
-    status: 'OK', 
-    timestamp: new Date().toISOString(),
-    environment: process.env.NODE_ENV,
-    uptime: process.uptime(),
-    memory: process.memoryUsage(),
-    supabase: process.env.SUPABASE_URL ? '✅ Configured' : '❌ Missing',
-    routes: {
-      auth: !!authRoutes,
-      learners: !!learnerRoutes,
-      reports: !!reportRoutes,
-      attendance: !!attendanceRoutes,
-      dashboard: !!dashboardRoutes,
-      admin: !!adminRoutes,
-      classes: !!classRoutes,
-      subjects: !!subjectRoutes,
-      streams: !!streamRoutes,
-      assignments: !!assignmentRoutes,
-      adminStats: !!adminStatsRoutes
-    }
-  });
-});
 
 // API info endpoint
 app.get('/api', (req, res) => {
@@ -402,17 +392,28 @@ app.use((req, res) => {
   });
 });
 
-// Error handling middleware
+// ============================================
+// ENHANCED ERROR HANDLING
+// ============================================
 app.use((err, req, res, next) => {
   console.error('🔥 Error:', {
     message: err.message,
-    stack: process.env.NODE_ENV === 'development' ? err.stack : '🔒 Hidden in production',
+    stack: process.env.NODE_ENV === 'development' ? err.stack : '🔒 Hidden',
     path: req.path,
     method: req.method,
     timestamp: new Date().toISOString()
   });
 
-  // Handle specific error types
+  // Rate limit errors
+  if (err.code === 'RATE_LIMIT_EXCEEDED' || err.status === 429) {
+    return res.status(429).json({ 
+      success: false,
+      message: 'Too many requests. Please slow down.',
+      retryAfter: err.retryAfter || 60
+    });
+  }
+
+  // Validation errors
   if (err.name === 'ValidationError') {
     return res.status(400).json({ 
       success: false,
@@ -421,6 +422,7 @@ app.use((err, req, res, next) => {
     });
   }
 
+  // JWT errors
   if (err.name === 'UnauthorizedError' || err.name === 'JsonWebTokenError') {
     return res.status(401).json({ 
       success: false,
@@ -428,10 +430,11 @@ app.use((err, req, res, next) => {
     });
   }
 
+  // Supabase errors
   if (err.code === 'PGRST116') {
     return res.status(404).json({ 
       success: false,
-      message: 'Resource not found in database' 
+      message: 'Resource not found' 
     });
   }
 
@@ -449,7 +452,7 @@ app.use((err, req, res, next) => {
     });
   }
 
-  // Database connection error
+  // Database connection errors
   if (err.code === 'ECONNREFUSED' || err.code === 'ENOTFOUND') {
     return res.status(503).json({ 
       success: false,
@@ -471,7 +474,9 @@ app.use((err, req, res, next) => {
   });
 });
 
-// Start server - Bind to 0.0.0.0 for Render
+// ============================================
+// START SERVER
+// ============================================
 const PORT = process.env.PORT || 5000;
 const server = app.listen(PORT, '0.0.0.0', () => {
   console.log('\n' + '='.repeat(60));
@@ -491,7 +496,9 @@ const server = app.listen(PORT, '0.0.0.0', () => {
   console.log('='.repeat(60));
 });
 
-// Graceful shutdown
+// ============================================
+// GRACEFUL SHUTDOWN
+// ============================================
 const gracefulShutdown = () => {
   console.log('\n🛑 Received shutdown signal, closing server...');
   server.close(() => {
@@ -499,7 +506,6 @@ const gracefulShutdown = () => {
     process.exit(0);
   });
   
-  // Force close after 10 seconds
   setTimeout(() => {
     console.error('❌ Could not close connections in time, forcefully shutting down');
     process.exit(1);
@@ -512,19 +518,11 @@ process.on('SIGINT', gracefulShutdown);
 // Handle unhandled rejections
 process.on('unhandledRejection', (reason, promise) => {
   console.error('💥 Unhandled Rejection at:', promise, 'reason:', reason);
-  // Don't exit in production, just log
-  if (process.env.NODE_ENV !== 'production') {
-    process.exit(1);
-  }
 });
 
 // Handle uncaught exceptions
 process.on('uncaughtException', (error) => {
   console.error('💥 Uncaught Exception:', error);
-  // Don't exit in production, just log
-  if (process.env.NODE_ENV !== 'production') {
-    process.exit(1);
-  }
 });
 
 module.exports = app;
