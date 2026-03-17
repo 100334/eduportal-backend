@@ -59,7 +59,7 @@ const corsOptions = {
   credentials: true,
   optionsSuccessStatus: 200
 };
-app.use(cors(corsOptions)); // 👈 Only use this ONCE (removed duplicate)
+app.use(cors(corsOptions));
 
 // Add a simple CORS test endpoint
 app.options('/api/test-cors', cors(corsOptions));
@@ -240,27 +240,25 @@ app.use('/api/admin/assignments', assignmentRoutes);
 app.use('/api/admin/stats', adminStatsRoutes);
 
 // ============================================
-// ROUTE DEBUGGING - Add this to see all registered routes
+// SAFE ROUTE DEBUGGING - FIXED VERSION
 // ============================================
 console.log('\n📋 Registered Routes:');
-const listRoutes = (stack, basePath = '') => {
-  stack.forEach((layer) => {
-    if (layer.route) {
-      const methods = Object.keys(layer.route.methods).join(',').toUpperCase();
-      console.log(`   ${methods} ${basePath}${layer.route.path}`);
-    } else if (layer.name === 'router' && layer.handle.stack) {
-      // This is a router middleware - recursively list its routes
-      const routerPath = layer.regexp.source
-        .replace('\\/?(?=\\/|$)', '')
-        .replace(/\\\//g, '/')
-        .replace(/\^/g, '')
-        .replace(/\?/g, '')
-        .replace(/\(\?:\(\[\^\\\/\]\+\?\)\)/g, ':param');
-      listRoutes(layer.handle.stack, basePath + routerPath);
-    }
-  });
-};
-listRoutes(app._router.stack);
+try {
+  if (app._router && app._router.stack) {
+    app._router.stack.forEach((layer) => {
+      if (layer.route) {
+        const methods = Object.keys(layer.route.methods).join(',').toUpperCase();
+        console.log(`   ${methods} ${layer.route.path}`);
+      } else if (layer.name === 'router' && layer.handle.stack) {
+        console.log(`   Router: ${layer.regexp}`);
+      }
+    });
+  } else {
+    console.log('   Router not yet initialized - skipping route listing');
+  }
+} catch (err) {
+  console.log('   Could not list routes:', err.message);
+}
 console.log('='.repeat(50));
 
 // Health check endpoint - Important for Render
