@@ -19,11 +19,11 @@ exports.teacherLogin = async (req, res, next) => {
     if (username === 'admin' && password === 'password123') {
       
       // Try to find teacher in database
-      const { data: teacher } = await supabase
+      const { data: teacher, error: teacherError } = await supabase
         .from('teachers')
         .select('*')
         .ilike('email', `${username}@eduportal.com`)
-        .single();
+        .maybeSingle(); // Use maybeSingle instead of single to avoid error when not found
 
       const token = jwt.sign(
         { 
@@ -79,7 +79,7 @@ exports.teacherLogin = async (req, res, next) => {
 };
 
 // ============================================
-// LEARNER LOGIN
+// LEARNER LOGIN - FIXED VERSION
 // ============================================
 exports.learnerLogin = async (req, res, next) => {
   try {
@@ -91,13 +91,32 @@ exports.learnerLogin = async (req, res, next) => {
     const { name, regNumber } = req.body;
     const supabase = req.app.locals.supabase;
 
-    // Find learner by name and registration number
-    const { data: learner, error } = await supabase
+    console.log('🔍 Searching for learner:', { name, regNumber });
+
+    // First, let's check if the learners table exists and has data
+    const { data: allLearners, error: countError } = await supabase
+      .from('learners')
+      .select('count', { count: 'exact', head: true });
+
+    if (countError) {
+      console.error('❌ Error accessing learners table:', countError);
+      return res.status(500).json({
+        success: false,
+        message: 'Database error. Please contact support.'
+      });
+    }
+
+    // Try different matching strategies
+    let learner = null;
+    let error = null;
+
+    // Strategy 1: Exact match with case-insensitive name
+    const { data: learnerData, error: learnerError } = await supabase
       .from('learners')
       .select(`
         *,
-        learner_class_enrollments(
-          classes(
+        learner_class_enrollments!left(
+          class:classes!inner(
             id,
             name,
             form_level,
@@ -107,28 +126,78 @@ exports.learnerLogin = async (req, res, next) => {
       `)
       .ilike('name', name.trim())
       .eq('reg_number', regNumber.trim())
-      .single();
+      .maybeSingle(); // Use maybeSingle to avoid "multiple rows returned" error
 
-    if (error || !learner) {
+    if (learnerError) {
+      console.error('❌ Query error:', learnerError);
+      error = learnerError;
+    } else {
+      learner = learnerData;
+    }
+
+    // Strategy 2: If not found, try with different field names
+    if (!learner) {
+      console.log('⚠️ Not found with exact match, trying alternative fields...');
+      
+      const { data: altLearner } = await supabase
+        .from('learners')
+        .select(`
+          *,
+          learner_class_enrollments!left(
+            class:classes!inner(
+              id,
+              name,
+              form_level,
+              stream
+            )
+          )
+        `)
+        .or(`name.ilike.%${name}%,full_name.ilike.%${name}%,student_name.ilike.%${name}%`)
+        .or(`reg_number.eq.${regNumber},registration_number.eq.${regNumber},student_id.eq.${regNumber}`)
+        .maybeSingle();
+
+      if (altLearner) {
+        learner = altLearner;
+        console.log('✅ Found with alternative matching');
+      }
+    }
+
+    if (!learner) {
+      console.log('❌ Learner not found in database');
+      
+      // For debugging: Check what learners exist (remove in production)
+      const { data: existingLearners } = await supabase
+        .from('learners')
+        .select('name, reg_number')
+        .limit(5);
+      
+      console.log('📋 Sample existing learners:', existingLearners);
+
       return res.status(401).json({ 
         success: false,
-        message: 'Invalid name or registration number' 
+        message: 'Invalid name or registration number',
+        debug: process.env.NODE_ENV !== 'production' ? { 
+          note: 'Check console for existing learners',
+          sample: existingLearners 
+        } : undefined
       });
     }
 
     // Check if learner is active
-    if (learner.status !== 'Active') {
+    if (learner.status && learner.status !== 'Active' && learner.status !== 'active') {
       return res.status(403).json({ 
         success: false,
         message: 'Your account is not active. Please contact the school.' 
       });
     }
 
+    console.log('✅ Learner found:', learner.name);
+
     const token = jwt.sign(
       { 
         id: learner.id, 
         role: 'learner',
-        regNumber: learner.reg_number,
+        regNumber: learner.reg_number || learner.regNumber,
         name: learner.name,
         learner_id: learner.id
       },
@@ -144,29 +213,40 @@ exports.learnerLogin = async (req, res, next) => {
     });
 
     // Get current class info
-    const currentClass = learner.learner_class_enrollments?.[0]?.classes;
+    const currentClass = learner.learner_class_enrollments?.[0]?.class || null;
 
-    // Remove sensitive data
-    delete learner.created_at;
-    delete learner.updated_at;
-    delete learner.learner_class_enrollments;
+    // Create user object with consistent field names
+    const userObject = {
+      id: learner.id,
+      name: learner.name,
+      regNumber: learner.reg_number || learner.regNumber,
+      reg_number: learner.reg_number || learner.regNumber, // Include both for compatibility
+      grade: learner.grade || learner.class_level,
+      email: learner.email,
+      role: 'learner',
+      currentClass: currentClass
+    };
+
+    // Add optional fields if they exist
+    if (learner.first_name) userObject.first_name = learner.first_name;
+    if (learner.last_name) userObject.last_name = learner.last_name;
+    if (learner.gender) userObject.gender = learner.gender;
+    if (learner.age) userObject.age = learner.age;
+    if (learner.enrollment_date) userObject.enrollment_date = learner.enrollment_date;
 
     res.json({
       success: true,
       token,
-      user: {
-        ...learner,
-        role: 'learner',
-        currentClass: currentClass || null
-      }
+      user: userObject
     });
   } catch (error) {
+    console.error('❌ Learner login error:', error);
     next(error);
   }
 };
 
 // ============================================
-// ADMIN LOGIN (NEW)
+// ADMIN LOGIN
 // ============================================
 exports.adminLogin = async (req, res, next) => {
   try {
@@ -186,10 +266,10 @@ exports.adminLogin = async (req, res, next) => {
         .from('admins')
         .select('*')
         .eq('email', email)
-        .single();
+        .maybeSingle(); // Use maybeSingle
 
       // If admin doesn't exist, create default admin
-      if (error || !admin) {
+      if (!admin) {
         const { data: newAdmin, error: createError } = await supabase
           .from('admins')
           .insert([{
@@ -293,7 +373,7 @@ exports.adminLogin = async (req, res, next) => {
 };
 
 // ============================================
-// GET CURRENT USER (NEW)
+// GET CURRENT USER
 // ============================================
 exports.getCurrentUser = async (req, res, next) => {
   try {
@@ -313,7 +393,7 @@ exports.getCurrentUser = async (req, res, next) => {
         .from('admins')
         .select('*')
         .eq('id', decoded.id)
-        .single();
+        .maybeSingle();
       
       if (admin) {
         userData = {
@@ -345,7 +425,7 @@ exports.getCurrentUser = async (req, res, next) => {
         .from('teachers')
         .select('*')
         .eq('id', decoded.id)
-        .single();
+        .maybeSingle();
       
       if (teacher) {
         userData = {
@@ -365,7 +445,7 @@ exports.getCurrentUser = async (req, res, next) => {
         .select(`
           *,
           learner_class_enrollments(
-            classes(
+            class:classes(
               id,
               name,
               form_level,
@@ -374,17 +454,27 @@ exports.getCurrentUser = async (req, res, next) => {
           )
         `)
         .eq('id', decoded.id)
-        .single();
+        .maybeSingle();
       
       if (learner) {
-        const currentClass = learner.learner_class_enrollments?.[0]?.classes;
-        delete learner.learner_class_enrollments;
+        const currentClass = learner.learner_class_enrollments?.[0]?.class || null;
         
         userData = {
-          ...learner,
+          id: learner.id,
+          name: learner.name,
+          regNumber: learner.reg_number || learner.regNumber,
+          reg_number: learner.reg_number || learner.regNumber,
+          grade: learner.grade,
+          email: learner.email,
           role: 'learner',
-          currentClass: currentClass || null
+          currentClass: currentClass
         };
+        
+        // Add optional fields
+        if (learner.first_name) userData.first_name = learner.first_name;
+        if (learner.last_name) userData.last_name = learner.last_name;
+        if (learner.gender) userData.gender = learner.gender;
+        if (learner.age) userData.age = learner.age;
       }
     }
 
@@ -394,7 +484,7 @@ exports.getCurrentUser = async (req, res, next) => {
         id: decoded.id,
         role: decoded.role,
         name: decoded.name || decoded.username || 'User',
-        ...(decoded.regNumber && { reg_number: decoded.regNumber })
+        ...(decoded.regNumber && { regNumber: decoded.regNumber, reg_number: decoded.regNumber })
       };
     }
 

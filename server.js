@@ -40,7 +40,9 @@ const corsOptions = {
     
     const allowedOrigins = [
       'http://localhost:3000',
+      'http://localhost:5000',
       'https://eduportal-frontend.vercel.app',
+      'https://eduportal-backend-vctg.onrender.com',
       ...(process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : [])
     ];
     
@@ -82,7 +84,7 @@ const limiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   // Skip rate limiting for health checks in production
-  skip: (req) => req.path === '/health'
+  skip: (req) => req.path === '/health' || req.path === '/api/test'
 });
 app.use('/api', limiter);
 
@@ -99,11 +101,14 @@ if (process.env.NODE_ENV === 'development') {
   }));
 }
 
-// Debug: Check if route files exist before importing
-console.log('📁 Checking route files...');
-console.log('='.repeat(50));
+console.log('='.repeat(60));
+console.log('🚀 STARTING SERVER INITIALIZATION');
+console.log('='.repeat(60));
 
-// Import routes with error handling
+// Debug: Check if route files exist before importing
+console.log('\n📁 Checking route files...');
+
+// Import routes with error handling - FIXED: auth import now matches your actual filename
 let authRoutes, 
     learnerRoutes, 
     reportRoutes, 
@@ -116,19 +121,34 @@ let authRoutes,
     assignmentRoutes,
     adminStatsRoutes;
 
-// Auth routes
+// Auth routes - IMPORTANT: Your file is named 'auth.js', not 'authRoutes.js'
 try {
-  authRoutes = require('./routes/auth');
-  console.log('✅ Auth routes loaded');
+  authRoutes = require('./routes/auth');  // Changed from 'authRoutes' to 'auth'
+  console.log('✅ Auth routes loaded: ./routes/auth.js');
+  console.log(`   📍 Available auth endpoints:`);
+  // Log the actual routes if available
+  if (authRoutes.stack) {
+    authRoutes.stack.forEach(layer => {
+      if (layer.route) {
+        const methods = Object.keys(layer.route.methods).join(',').toUpperCase();
+        console.log(`      ${methods} /api/auth${layer.route.path}`);
+      }
+    });
+  }
 } catch (error) {
   console.error('❌ Failed to load auth routes:', error.message);
+  console.error('   💡 Make sure the file exists at: ./routes/auth.js');
   authRoutes = express.Router();
+  // Add a test endpoint to verify the fallback is working
+  authRoutes.post('/test', (req, res) => {
+    res.json({ message: 'Auth fallback route working', received: req.body });
+  });
 }
 
 // Learner routes
 try {
-  learnerRoutes = require('./routes/learners');
-  console.log('✅ Learners routes loaded');
+  learnerRoutes = require('./routes/learnerRoutes');
+  console.log('✅ Learners routes loaded: ./routes/learnerRoutes.js');
 } catch (error) {
   console.error('❌ Failed to load learners routes:', error.message);
   learnerRoutes = express.Router();
@@ -136,8 +156,8 @@ try {
 
 // Report routes
 try {
-  reportRoutes = require('./routes/reports');
-  console.log('✅ Reports routes loaded');
+  reportRoutes = require('./routes/reportRoutes');
+  console.log('✅ Reports routes loaded: ./routes/reportRoutes.js');
 } catch (error) {
   console.error('❌ Failed to load reports routes:', error.message);
   reportRoutes = express.Router();
@@ -145,8 +165,8 @@ try {
 
 // Attendance routes
 try {
-  attendanceRoutes = require('./routes/attendance');
-  console.log('✅ Attendance routes loaded');
+  attendanceRoutes = require('./routes/attendanceRoutes');
+  console.log('✅ Attendance routes loaded: ./routes/attendanceRoutes.js');
 } catch (error) {
   console.error('❌ Failed to load attendance routes:', error.message);
   attendanceRoutes = express.Router();
@@ -154,8 +174,8 @@ try {
 
 // Dashboard routes
 try {
-  dashboardRoutes = require('./routes/dashboard');
-  console.log('✅ Dashboard routes loaded');
+  dashboardRoutes = require('./routes/dashboardRoutes');
+  console.log('✅ Dashboard routes loaded: ./routes/dashboardRoutes.js');
 } catch (error) {
   console.error('❌ Failed to load dashboard routes:', error.message);
   dashboardRoutes = express.Router();
@@ -163,8 +183,8 @@ try {
 
 // Admin management routes
 try {
-  adminRoutes = require('./routes/admin');
-  console.log('✅ Admin routes loaded');
+  adminRoutes = require('./routes/adminRoutes');
+  console.log('✅ Admin routes loaded: ./routes/adminRoutes.js');
 } catch (error) {
   console.error('❌ Failed to load admin routes:', error.message);
   adminRoutes = express.Router();
@@ -172,8 +192,8 @@ try {
 
 // Class management routes (Forms 1-4)
 try {
-  classRoutes = require('./routes/classes');
-  console.log('✅ Class routes loaded');
+  classRoutes = require('./routes/classRoutes');
+  console.log('✅ Class routes loaded: ./routes/classRoutes.js');
 } catch (error) {
   console.error('❌ Failed to load class routes:', error.message);
   classRoutes = express.Router();
@@ -181,8 +201,8 @@ try {
 
 // Subject management routes
 try {
-  subjectRoutes = require('./routes/subjects');
-  console.log('✅ Subject routes loaded');
+  subjectRoutes = require('./routes/subjectRoutes');
+  console.log('✅ Subject routes loaded: ./routes/subjectRoutes.js');
 } catch (error) {
   console.error('❌ Failed to load subject routes:', error.message);
   subjectRoutes = express.Router();
@@ -190,8 +210,8 @@ try {
 
 // Stream management routes
 try {
-  streamRoutes = require('./routes/streams');
-  console.log('✅ Stream routes loaded');
+  streamRoutes = require('./routes/streamRoutes');
+  console.log('✅ Stream routes loaded: ./routes/streamRoutes.js');
 } catch (error) {
   console.error('❌ Failed to load stream routes:', error.message);
   streamRoutes = express.Router();
@@ -199,8 +219,8 @@ try {
 
 // Assignment routes (teacher-class-subject assignments)
 try {
-  assignmentRoutes = require('./routes/assignments');
-  console.log('✅ Assignment routes loaded');
+  assignmentRoutes = require('./routes/assignmentRoutes');
+  console.log('✅ Assignment routes loaded: ./routes/assignmentRoutes.js');
 } catch (error) {
   console.error('❌ Failed to load assignment routes:', error.message);
   assignmentRoutes = express.Router();
@@ -208,58 +228,116 @@ try {
 
 // Admin statistics routes
 try {
-  adminStatsRoutes = require('./routes/adminStats');
-  console.log('✅ Admin stats routes loaded');
+  adminStatsRoutes = require('./routes/adminStatsRoutes');
+  console.log('✅ Admin stats routes loaded: ./routes/adminStatsRoutes.js');
 } catch (error) {
   console.error('❌ Failed to load admin stats routes:', error.message);
   adminStatsRoutes = express.Router();
 }
 
-console.log('='.repeat(50));
+console.log('='.repeat(60));
+console.log('\n📝 REGISTERING ROUTES...');
+console.log('='.repeat(60));
 
 // ============================================
 // REGISTER ROUTES
 // ============================================
 
-// Public routes
+// Public test routes (ALWAYS available)
+app.get('/test', (req, res) => {
+  res.json({ 
+    message: 'Server is running!', 
+    time: new Date().toISOString(),
+    env: process.env.NODE_ENV 
+  });
+});
+
+app.post('/api/auth/test', (req, res) => {
+  console.log('Test auth endpoint hit:', req.body);
+  res.json({ 
+    success: true, 
+    message: 'Auth test endpoint working',
+    received: req.body,
+    timestamp: new Date().toISOString()
+  });
+});
+
+// Public routes - AUTH IS NOW CORRECTLY IMPORTED
 app.use('/api/auth', authRoutes);
-app.use('/api/test', (req, res) => res.json({ message: 'API is working!' }));
+console.log('   ✅ /api/auth ->', authRoutes.stack ? `${authRoutes.stack.length} routes` : 'Router mounted');
+
+// Simple test endpoint
+app.use('/api/test', (req, res) => res.json({ 
+  message: 'API test endpoint is working!',
+  path: req.path,
+  method: req.method
+}));
+console.log('   ✅ /api/test registered');
 
 // Teacher/Learner routes
 app.use('/api/learners', learnerRoutes);
+console.log('   ✅ /api/learners ->', learnerRoutes.stack ? `${learnerRoutes.stack.length} routes` : 'Router mounted');
+
 app.use('/api/reports', reportRoutes);
+console.log('   ✅ /api/reports ->', reportRoutes.stack ? `${reportRoutes.stack.length} routes` : 'Router mounted');
+
 app.use('/api/attendance', attendanceRoutes);
+console.log('   ✅ /api/attendance ->', attendanceRoutes.stack ? `${attendanceRoutes.stack.length} routes` : 'Router mounted');
+
 app.use('/api/dashboard', dashboardRoutes);
+console.log('   ✅ /api/dashboard ->', dashboardRoutes.stack ? `${dashboardRoutes.stack.length} routes` : 'Router mounted');
 
 // ADMIN ROUTES
 app.use('/api/admin', adminRoutes);
+console.log('   ✅ /api/admin ->', adminRoutes.stack ? `${adminRoutes.stack.length} routes` : 'Router mounted');
+
 app.use('/api/admin/classes', classRoutes);
+console.log('   ✅ /api/admin/classes ->', classRoutes.stack ? `${classRoutes.stack.length} routes` : 'Router mounted');
+
 app.use('/api/admin/subjects', subjectRoutes);
+console.log('   ✅ /api/admin/subjects ->', subjectRoutes.stack ? `${subjectRoutes.stack.length} routes` : 'Router mounted');
+
 app.use('/api/admin/streams', streamRoutes);
+console.log('   ✅ /api/admin/streams ->', streamRoutes.stack ? `${streamRoutes.stack.length} routes` : 'Router mounted');
+
 app.use('/api/admin/assignments', assignmentRoutes);
+console.log('   ✅ /api/admin/assignments ->', assignmentRoutes.stack ? `${assignmentRoutes.stack.length} routes` : 'Router mounted');
+
 app.use('/api/admin/stats', adminStatsRoutes);
+console.log('   ✅ /api/admin/stats ->', adminStatsRoutes.stack ? `${adminStatsRoutes.stack.length} routes` : 'Router mounted');
+
+console.log('='.repeat(60));
 
 // ============================================
-// SAFE ROUTE DEBUGGING - FIXED VERSION
+// SAFE ROUTE DEBUGGING
 // ============================================
-console.log('\n📋 Registered Routes:');
+console.log('\n📋 Registered Routes Summary:');
 try {
+  let routeCount = 0;
   if (app._router && app._router.stack) {
+    console.log('\n   🔍 All registered paths:');
     app._router.stack.forEach((layer) => {
       if (layer.route) {
         const methods = Object.keys(layer.route.methods).join(',').toUpperCase();
-        console.log(`   ${methods} ${layer.route.path}`);
-      } else if (layer.name === 'router' && layer.handle.stack) {
-        console.log(`   Router: ${layer.regexp}`);
+        console.log(`      ${methods} ${layer.route.path}`);
+        routeCount++;
+      } else if (layer.name === 'router' && layer.regexp) {
+        // This is a router middleware - show its base path
+        const path = layer.regexp.toString()
+          .replace('/\\^?(?:\\/(?:\\(\\?([^\\/)]+)\\))?)?(?:\\/?\\(\\?=\\/?\\|\\/\\))?/g', '')
+          .replace(/\\\//g, '/')
+          .replace(/\(\?:\(\[\^\\\/\]\+\?\)\)/g, '*');
+        console.log(`      📁 Router: ${path}`);
       }
     });
+    console.log(`\n   Total routes: ${routeCount}`);
   } else {
-    console.log('   Router not yet initialized - skipping route listing');
+    console.log('   Router not yet fully initialized');
   }
 } catch (err) {
   console.log('   Could not list routes:', err.message);
 }
-console.log('='.repeat(50));
+console.log('='.repeat(60));
 
 // Health check endpoint - Important for Render
 app.get('/health', (req, res) => {
@@ -269,6 +347,7 @@ app.get('/health', (req, res) => {
     environment: process.env.NODE_ENV,
     uptime: process.uptime(),
     memory: process.memoryUsage(),
+    supabase: process.env.SUPABASE_URL ? '✅ Configured' : '❌ Missing',
     routes: {
       auth: !!authRoutes,
       learners: !!learnerRoutes,
@@ -300,7 +379,8 @@ app.get('/api', (req, res) => {
       attendance: '/api/attendance',
       dashboard: '/api/dashboard',
       admin: '/api/admin',
-      health: '/health'
+      health: '/health',
+      test: '/test'
     }
   });
 });
@@ -312,7 +392,9 @@ app.get('/', (req, res) => {
 
 // 404 handler
 app.use((req, res) => {
+  console.log(`404 - ${req.method} ${req.path} - Not found`);
   res.status(404).json({ 
+    success: false,
     message: 'Route not found',
     path: req.path,
     method: req.method,
@@ -333,27 +415,36 @@ app.use((err, req, res, next) => {
   // Handle specific error types
   if (err.name === 'ValidationError') {
     return res.status(400).json({ 
+      success: false,
       message: 'Validation error', 
       errors: err.errors 
     });
   }
 
   if (err.name === 'UnauthorizedError' || err.name === 'JsonWebTokenError') {
-    return res.status(401).json({ message: 'Invalid or expired token' });
+    return res.status(401).json({ 
+      success: false,
+      message: 'Invalid or expired token' 
+    });
   }
 
   if (err.code === 'PGRST116') {
-    return res.status(404).json({ message: 'Resource not found in database' });
+    return res.status(404).json({ 
+      success: false,
+      message: 'Resource not found in database' 
+    });
   }
 
   if (err.code === '23505') { // Unique violation
     return res.status(409).json({ 
+      success: false,
       message: 'Duplicate entry. This record already exists.' 
     });
   }
 
   if (err.code === '23503') { // Foreign key violation
     return res.status(400).json({ 
+      success: false,
       message: 'Referenced record does not exist.' 
     });
   }
@@ -361,6 +452,7 @@ app.use((err, req, res, next) => {
   // Database connection error
   if (err.code === 'ECONNREFUSED' || err.code === 'ENOTFOUND') {
     return res.status(503).json({ 
+      success: false,
       message: 'Database connection failed. Please try again later.' 
     });
   }
@@ -370,6 +462,7 @@ app.use((err, req, res, next) => {
   const message = err.message || 'Internal server error';
   
   res.status(status).json({ 
+    success: false,
     message,
     ...(process.env.NODE_ENV === 'development' && { 
       stack: err.stack,
@@ -381,13 +474,21 @@ app.use((err, req, res, next) => {
 // Start server - Bind to 0.0.0.0 for Render
 const PORT = process.env.PORT || 5000;
 const server = app.listen(PORT, '0.0.0.0', () => {
-  console.log(`\n🚀 Server running in ${process.env.NODE_ENV || 'development'} mode on port ${PORT}`);
-  console.log(`📡 Supabase URL: ${process.env.SUPABASE_URL ? '✅ Configured' : '❌ Missing'}`);
+  console.log('\n' + '='.repeat(60));
+  console.log(`🚀 SERVER STARTED SUCCESSFULLY`);
+  console.log('='.repeat(60));
+  console.log(`\n📡 Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`📡 Port: ${PORT}`);
+  console.log(`📡 Supabase: ${process.env.SUPABASE_URL ? '✅ Connected' : '❌ Not configured'}`);
   console.log(`\n📍 Available endpoints:`);
   console.log(`   - Health:    ${process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`}/health`);
   console.log(`   - API Info:  ${process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`}/api`);
+  console.log(`   - Test:      ${process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`}/test`);
+  console.log(`   - Auth Test: ${process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`}/api/auth/test`);
+  console.log(`   - Learner Login: ${process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`}/api/auth/learner/login`);
   console.log(`\n📊 Server ready to accept connections`);
-  console.log(`🌍 Public URL: ${process.env.RENDER_EXTERNAL_URL || 'Not deployed yet'}`);
+  console.log(`🌍 Public URL: ${process.env.RENDER_EXTERNAL_URL || 'http://localhost:' + PORT}`);
+  console.log('='.repeat(60));
 });
 
 // Graceful shutdown
@@ -425,3 +526,5 @@ process.on('uncaughtException', (error) => {
     process.exit(1);
   }
 });
+
+module.exports = app;
