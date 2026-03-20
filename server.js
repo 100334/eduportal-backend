@@ -13,14 +13,40 @@ dotenv.config();
 // Initialize Express
 const app = express();
 
-// Trust proxy - Required for Render (and other reverse proxies)
+// Trust proxy - Required for Render
 app.set('trust proxy', 1);
 
-// Initialize Supabase
+// ============================================
+// SUPABASE CONNECTION
+// ============================================
+console.log('🔌 Connecting to Supabase...');
+console.log('Supabase URL:', process.env.SUPABASE_URL);
+
 const supabase = createClient(
   process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY
+  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY,
+  {
+    auth: {
+      autoRefreshToken: true,
+      persistSession: true,
+      detectSessionInUrl: true
+    }
+  }
 );
+
+// Test Supabase connection
+(async () => {
+  try {
+    const { data, error } = await supabase.from('users').select('count').limit(1);
+    if (error) {
+      console.error('❌ Supabase connection test failed:', error.message);
+    } else {
+      console.log('✅ Supabase connected successfully!');
+    }
+  } catch (err) {
+    console.error('❌ Supabase connection error:', err.message);
+  }
+})();
 
 // Make supabase available globally
 app.locals.supabase = supabase;
@@ -30,28 +56,19 @@ app.use(helmet({
   crossOriginResourcePolicy: { policy: "cross-origin" }
 }));
 
-// CORS configuration - Fixed for Render
+// CORS configuration
 const corsOptions = {
   origin: function (origin, callback) {
-    // Allow requests with no origin (like mobile apps, curl, Postman)
-    if (!origin) {
-      return callback(null, true);
-    }
-    
     const allowedOrigins = [
       'http://localhost:3000',
+      'http://localhost:3004',
       'http://localhost:5000',
       'https://eduportal-frontend.vercel.app',
-      'https://eduportal-backend-vctg.onrender.com',
+      'https://eduportal-frontend.netlify.app',
       ...(process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : [])
     ];
     
-    // In development, allow all origins
-    if (process.env.NODE_ENV !== 'production') {
-      return callback(null, true);
-    }
-    
-    if (allowedOrigins.indexOf(origin) !== -1) {
+    if (!origin || allowedOrigins.indexOf(origin) !== -1 || process.env.NODE_ENV !== 'production') {
       callback(null, true);
     } else {
       console.log('❌ Blocked origin:', origin);
@@ -63,414 +80,556 @@ const corsOptions = {
 };
 app.use(cors(corsOptions));
 
-// Add a simple CORS test endpoint
-app.options('/api/test-cors', cors(corsOptions));
-app.get('/api/test-cors', (req, res) => {
-  res.json({ 
-    message: 'CORS is working!',
-    origin: req.headers.origin,
-    allowed: true
-  });
-});
-
 // Compression middleware
 app.use(compression());
 
-// ============================================
-// UPDATED RATE LIMITING - More lenient for auth
-// ============================================
-// General API rate limiter (stricter)
+// Rate limiting
 const apiLimiter = rateLimit({
-  windowMs: parseInt(process.env.RATE_LIMIT_WINDOW) || 60 * 1000, // 1 minute (reduced from 15 min)
-  max: parseInt(process.env.RATE_LIMIT_MAX) || 200, // Increased from 100 to 200 per minute
-  message: { 
-    success: false,
-    message: 'Too many requests from this IP, please try again later.',
-    code: 'RATE_LIMIT_EXCEEDED'
-  },
+  windowMs: parseInt(process.env.RATE_LIMIT_WINDOW) || 60 * 1000,
+  max: parseInt(process.env.RATE_LIMIT_MAX) || 200,
+  message: { success: false, message: 'Too many requests, please try again later.' },
   standardHeaders: true,
   legacyHeaders: false,
-  // Skip rate limiting for health checks
-  skip: (req) => req.path === '/health' || req.path === '/api/test'
+  skip: (req) => req.path === '/health' || req.path === '/test'
 });
 
-// Auth rate limiter (more lenient)
 const authLimiter = rateLimit({
-  windowMs: 60 * 1000, // 1 minute
-  max: 50, // 50 login attempts per minute
-  message: { 
-    success: false,
-    message: 'Too many login attempts. Please try again later.',
-    code: 'AUTH_RATE_LIMIT_EXCEEDED'
-  },
+  windowMs: 60 * 1000,
+  max: 50,
+  message: { success: false, message: 'Too many login attempts. Please try again later.' },
   standardHeaders: true,
-  legacyHeaders: false,
-  skip: (req) => req.path === '/api/auth/test'
+  legacyHeaders: false
 });
 
-// Apply rate limiters
 app.use('/api', apiLimiter);
-app.use('/api/auth', authLimiter); // Stricter for auth endpoints
+app.use('/api/auth', authLimiter);
 
 // Body parsing middleware
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Logging middleware - Simplified for production
+// Logging middleware
 if (process.env.NODE_ENV === 'development') {
   app.use(morgan('dev'));
 } else {
-  app.use(morgan('combined', {
-    skip: (req) => req.path === '/health' // Don't log health checks
-  }));
+  app.use(morgan('combined', { skip: (req) => req.path === '/health' }));
 }
 
 console.log('='.repeat(60));
 console.log('🚀 STARTING SERVER INITIALIZATION');
 console.log('='.repeat(60));
 
-// Debug: Check if route files exist before importing
-console.log('\n📁 Checking route files...');
-
-// Import routes with error handling
-let authRoutes, 
-    learnerRoutes, 
-    reportRoutes, 
-    attendanceRoutes, 
-    dashboardRoutes,
-    adminRoutes,
-    classRoutes,
-    subjectRoutes,
-    streamRoutes,
-    assignmentRoutes,
-    adminStatsRoutes;
-
-// Auth routes
-try {
-  authRoutes = require('./routes/auth');
-  console.log('✅ Auth routes loaded: ./routes/auth.js');
-  if (authRoutes.stack) {
-    console.log(`   📍 Available auth endpoints:`);
-    authRoutes.stack.forEach(layer => {
-      if (layer.route) {
-        const methods = Object.keys(layer.route.methods).join(',').toUpperCase();
-        console.log(`      ${methods} /api/auth${layer.route.path}`);
-      }
-    });
-  }
-} catch (error) {
-  console.error('❌ Failed to load auth routes:', error.message);
-  authRoutes = express.Router();
-  authRoutes.post('/test', (req, res) => {
-    res.json({ message: 'Auth fallback route working', received: req.body });
-  });
-}
-
-// Learner routes
-try {
-  learnerRoutes = require('./routes/learnerRoutes');
-  console.log('✅ Learners routes loaded: ./routes/learnerRoutes.js');
-} catch (error) {
-  console.error('❌ Failed to load learners routes:', error.message);
-  learnerRoutes = express.Router();
-}
-
-// Report routes
-try {
-  reportRoutes = require('./routes/reportRoutes');
-  console.log('✅ Reports routes loaded: ./routes/reportRoutes.js');
-} catch (error) {
-  console.error('❌ Failed to load reports routes:', error.message);
-  reportRoutes = express.Router();
-}
-
-// Attendance routes
-try {
-  attendanceRoutes = require('./routes/attendanceRoutes');
-  console.log('✅ Attendance routes loaded: ./routes/attendanceRoutes.js');
-} catch (error) {
-  console.error('❌ Failed to load attendance routes:', error.message);
-  attendanceRoutes = express.Router();
-}
-
-// Dashboard routes
-try {
-  dashboardRoutes = require('./routes/dashboardRoutes');
-  console.log('✅ Dashboard routes loaded: ./routes/dashboardRoutes.js');
-} catch (error) {
-  console.error('❌ Failed to load dashboard routes:', error.message);
-  dashboardRoutes = express.Router();
-}
-
-// Admin management routes
-try {
-  adminRoutes = require('./routes/adminRoutes');
-  console.log('✅ Admin routes loaded: ./routes/adminRoutes.js');
-} catch (error) {
-  console.error('❌ Failed to load admin routes:', error.message);
-  adminRoutes = express.Router();
-}
-
-// Class management routes
-try {
-  classRoutes = require('./routes/classRoutes');
-  console.log('✅ Class routes loaded: ./routes/classRoutes.js');
-} catch (error) {
-  console.error('❌ Failed to load class routes:', error.message);
-  classRoutes = express.Router();
-}
-
-// Subject management routes
-try {
-  subjectRoutes = require('./routes/subjectRoutes');
-  console.log('✅ Subject routes loaded: ./routes/subjectRoutes.js');
-} catch (error) {
-  console.error('❌ Failed to load subject routes:', error.message);
-  subjectRoutes = express.Router();
-}
-
-// Stream management routes
-try {
-  streamRoutes = require('./routes/streamRoutes');
-  console.log('✅ Stream routes loaded: ./routes/streamRoutes.js');
-} catch (error) {
-  console.error('❌ Failed to load stream routes:', error.message);
-  streamRoutes = express.Router();
-}
-
-// Assignment routes
-try {
-  assignmentRoutes = require('./routes/assignmentRoutes');
-  console.log('✅ Assignment routes loaded: ./routes/assignmentRoutes.js');
-} catch (error) {
-  console.error('❌ Failed to load assignment routes:', error.message);
-  assignmentRoutes = express.Router();
-}
-
-// Admin statistics routes
-try {
-  adminStatsRoutes = require('./routes/adminStatsRoutes');
-  console.log('✅ Admin stats routes loaded: ./routes/adminStatsRoutes.js');
-} catch (error) {
-  console.error('❌ Failed to load admin stats routes:', error.message);
-  adminStatsRoutes = express.Router();
-}
-
-console.log('='.repeat(60));
-console.log('\n📝 REGISTERING ROUTES...');
-console.log('='.repeat(60));
-
 // ============================================
-// REGISTER ROUTES
+// PUBLIC TEST ENDPOINTS
 // ============================================
 
-// Public test routes (ALWAYS available - no rate limit)
 app.get('/test', (req, res) => {
   res.json({ 
+    success: true,
     message: 'Server is running!', 
     time: new Date().toISOString(),
-    env: process.env.NODE_ENV 
+    env: process.env.NODE_ENV,
+    supabase: supabase ? '✅ Connected' : '❌ Not configured'
   });
 });
 
-app.get('/health', (req, res) => {
-  res.status(200).json({ 
-    status: 'OK', 
-    timestamp: new Date().toISOString(),
-    environment: process.env.NODE_ENV,
-    uptime: process.uptime(),
-    memory: process.memoryUsage(),
-    supabase: process.env.SUPABASE_URL ? '✅ Connected' : '❌ Not configured'
-  });
+app.get('/health', async (req, res) => {
+  try {
+    // Test Supabase connection
+    const { data, error } = await supabase.from('users').select('count').limit(1);
+    
+    res.status(200).json({ 
+      status: 'OK', 
+      timestamp: new Date().toISOString(),
+      environment: process.env.NODE_ENV,
+      uptime: process.uptime(),
+      supabase: error ? '❌ Error' : '✅ Connected',
+      supabase_error: error ? error.message : null
+    });
+  } catch (error) {
+    res.status(200).json({ 
+      status: 'Degraded', 
+      timestamp: new Date().toISOString(),
+      supabase: '❌ Connection failed',
+      error: error.message
+    });
+  }
 });
 
-// Auth routes
-app.use('/api/auth', authRoutes);
-console.log('   ✅ /api/auth ->', authRoutes.stack ? `${authRoutes.stack.length} routes` : 'Router mounted');
+// ============================================
+// AUTH ROUTES - IMPROVED VERSION
+// ============================================
 
-// Test endpoint
+// Teacher login - IMPROVED with case-insensitive matching
+app.post('/api/auth/teacher/login', async (req, res) => {
+  try {
+    const { username, password } = req.body;
+    
+    console.log('==================================================');
+    console.log('🔍 TEACHER LOGIN ATTEMPT');
+    console.log('Username:', username);
+    console.log('==================================================');
+    
+    const normalizedUsername = username?.trim().toLowerCase();
+    
+    // Query Supabase for teacher with case-insensitive email match
+    const { data: teacher, error } = await supabase
+      .from('users')
+      .select('*')
+      .ilike('email', normalizedUsername)
+      .eq('role', 'teacher')
+      .maybeSingle();
+    
+    if (error) {
+      console.error('Supabase query error:', error);
+      return res.status(401).json({ 
+        success: false, 
+        message: 'Error finding teacher' 
+      });
+    }
+    
+    if (!teacher) {
+      console.log('❌ No teacher found with email:', normalizedUsername);
+      return res.status(401).json({ 
+        success: false, 
+        message: 'Invalid credentials' 
+      });
+    }
+    
+    console.log('✅ Teacher found:', teacher.email);
+    
+    // Check password (for demo, accept 'password123' or stored password)
+    const isValidPassword = password === 'password123' || 
+                           (teacher.password_hash && password === teacher.password_hash);
+    
+    if (!isValidPassword) {
+      console.log('❌ Invalid password for:', normalizedUsername);
+      return res.status(401).json({ 
+        success: false, 
+        message: 'Invalid credentials' 
+      });
+    }
+    
+    // Generate simple token
+    const token = Buffer.from(JSON.stringify({ 
+      id: teacher.id, 
+      email: teacher.email, 
+      role: teacher.role 
+    })).toString('base64');
+    
+    res.json({
+      success: true,
+      token,
+      refreshToken: token,
+      teacher: {
+        id: teacher.id,
+        name: teacher.name || teacher.email,
+        email: teacher.email
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ Teacher login error:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Server error: ' + error.message 
+    });
+  }
+});
+
+// Learner login - IMPROVED with flexible matching
+app.post('/api/auth/learner/login', async (req, res) => {
+  try {
+    const { name, regNumber } = req.body;
+    
+    console.log('==================================================');
+    console.log('🔍 LEARNER LOGIN ATTEMPT');
+    console.log('Request body:', { name, regNumber });
+    
+    // Clean and normalize the input
+    const normalizedName = name?.trim().toLowerCase();
+    const normalizedReg = regNumber?.trim().toUpperCase();
+    
+    console.log('Normalized - Name:', normalizedName);
+    console.log('Normalized - Reg Number:', normalizedReg);
+    console.log('==================================================');
+    
+    // First, let's see what's in the database for debugging
+    const { data: allLearners, error: listError } = await supabase
+      .from('learners')
+      .select('*');
+    
+    if (listError) {
+      console.error('Error listing learners:', listError);
+    } else {
+      console.log(`📊 Total learners in database: ${allLearners?.length || 0}`);
+      if (allLearners && allLearners.length > 0) {
+        console.log('📋 All learners in DB (first 10):');
+        allLearners.slice(0, 10).forEach(learner => {
+          console.log(`   ID:${learner.id} | Name:${learner.name} | Reg:${learner.reg_number} | Status:${learner.status}`);
+        });
+      }
+    }
+    
+    // Try to find the learner with flexible matching
+    let learner = null;
+    
+    // Method 1: Try ILIKE for case-insensitive partial matching
+    const { data: flexibleMatch, error: flexibleError } = await supabase
+      .from('learners')
+      .select('*')
+      .ilike('name', `%${normalizedName}%`)
+      .ilike('reg_number', `%${normalizedReg}%`)
+      .eq('status', 'Active')
+      .maybeSingle();
+    
+    if (flexibleError) {
+      console.error('Flexible match query error:', flexibleError);
+    } else if (flexibleMatch) {
+      learner = flexibleMatch;
+      console.log('✅ Found learner with flexible matching:', learner.name);
+    }
+    
+    // Method 2: If flexible match failed, try exact match with trim
+    if (!learner) {
+      const { data: exactMatch, error: exactError } = await supabase
+        .from('learners')
+        .select('*')
+        .eq('name', name?.trim())
+        .eq('reg_number', regNumber?.trim())
+        .maybeSingle();
+      
+      if (exactError) {
+        console.error('Exact match query error:', exactError);
+      } else if (exactMatch) {
+        learner = exactMatch;
+        console.log('✅ Found learner with exact match:', learner.name);
+      }
+    }
+    
+    // Method 3: Try case-insensitive exact match
+    if (!learner) {
+      const { data: caseInsensitiveMatch, error: ciError } = await supabase
+        .from('learners')
+        .select('*')
+        .ilike('name', normalizedName)
+        .ilike('reg_number', normalizedReg)
+        .maybeSingle();
+      
+      if (ciError) {
+        console.error('Case-insensitive match query error:', ciError);
+      } else if (caseInsensitiveMatch) {
+        learner = caseInsensitiveMatch;
+        console.log('✅ Found learner with case-insensitive match:', learner.name);
+      }
+    }
+    
+    if (!learner) {
+      console.log('❌ No matching learner found');
+      
+      // Debug: Show what we tried to match
+      console.log('💡 Debug info:');
+      console.log(`   Tried to match: Name="${normalizedName}", Reg="${normalizedReg}"`);
+      if (allLearners && allLearners.length > 0) {
+        console.log(`   Database entries: ${allLearners.map(l => `"${l.name}" (${l.reg_number})`).join(', ')}`);
+      } else {
+        console.log('   Database has no learners. Please add a learner first.');
+      }
+      
+      return res.status(401).json({ 
+        success: false, 
+        message: 'Invalid name or registration number. Please check and try again.' 
+      });
+    }
+    
+    console.log('✅ Learner found:', {
+      id: learner.id,
+      name: learner.name,
+      reg: learner.reg_number,
+      grade: learner.grade
+    });
+    
+    // Generate simple token
+    const token = Buffer.from(JSON.stringify({ 
+      id: learner.id, 
+      name: learner.name, 
+      role: 'learner' 
+    })).toString('base64');
+    
+    res.json({
+      success: true,
+      token,
+      learner: {
+        id: learner.id,
+        name: learner.name,
+        reg: learner.reg_number,
+        grade: learner.grade,
+        status: learner.status
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ Learner login error:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Server error: ' + error.message 
+    });
+  }
+});
+
+// Token verification
+app.get('/api/auth/verify', async (req, res) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  
+  if (!token) {
+    return res.status(401).json({ valid: false, message: 'No token provided' });
+  }
+  
+  try {
+    const decoded = JSON.parse(Buffer.from(token, 'base64').toString());
+    res.json({ valid: true, user: decoded });
+  } catch (error) {
+    res.status(401).json({ valid: false, message: 'Invalid token' });
+  }
+});
+
+// API test endpoint
 app.get('/api/test', (req, res) => {
   res.json({ 
-    success: true,
+    success: true, 
     message: 'API test endpoint is working!',
     timestamp: new Date().toISOString()
   });
 });
-console.log('   ✅ /api/test registered');
-
-// Teacher/Learner routes
-app.use('/api/learners', learnerRoutes);
-console.log('   ✅ /api/learners ->', learnerRoutes.stack ? `${learnerRoutes.stack.length} routes` : 'Router mounted');
-
-app.use('/api/reports', reportRoutes);
-console.log('   ✅ /api/reports ->', reportRoutes.stack ? `${reportRoutes.stack.length} routes` : 'Router mounted');
-
-app.use('/api/attendance', attendanceRoutes);
-console.log('   ✅ /api/attendance ->', attendanceRoutes.stack ? `${attendanceRoutes.stack.length} routes` : 'Router mounted');
-
-app.use('/api/dashboard', dashboardRoutes);
-console.log('   ✅ /api/dashboard ->', dashboardRoutes.stack ? `${dashboardRoutes.stack.length} routes` : 'Router mounted');
-
-// ADMIN ROUTES
-app.use('/api/admin', adminRoutes);
-console.log('   ✅ /api/admin ->', adminRoutes.stack ? `${adminRoutes.stack.length} routes` : 'Router mounted');
-
-app.use('/api/admin/classes', classRoutes);
-console.log('   ✅ /api/admin/classes ->', classRoutes.stack ? `${classRoutes.stack.length} routes` : 'Router mounted');
-
-app.use('/api/admin/subjects', subjectRoutes);
-console.log('   ✅ /api/admin/subjects ->', subjectRoutes.stack ? `${subjectRoutes.stack.length} routes` : 'Router mounted');
-
-app.use('/api/admin/streams', streamRoutes);
-console.log('   ✅ /api/admin/streams ->', streamRoutes.stack ? `${streamRoutes.stack.length} routes` : 'Router mounted');
-
-app.use('/api/admin/assignments', assignmentRoutes);
-console.log('   ✅ /api/admin/assignments ->', assignmentRoutes.stack ? `${assignmentRoutes.stack.length} routes` : 'Router mounted');
-
-app.use('/api/admin/stats', adminStatsRoutes);
-console.log('   ✅ /api/admin/stats ->', adminStatsRoutes.stack ? `${adminStatsRoutes.stack.length} routes` : 'Router mounted');
-
-console.log('='.repeat(60));
 
 // ============================================
-// ROUTE DEBUGGING
+// TEACHER ROUTES
 // ============================================
-console.log('\n📋 Registered Routes Summary:');
-try {
-  let routeCount = 0;
-  if (app._router && app._router.stack) {
-    console.log('\n   🔍 All registered paths:');
-    app._router.stack.forEach((layer) => {
-      if (layer.route) {
-        const methods = Object.keys(layer.route.methods).join(',').toUpperCase();
-        console.log(`      ${methods} ${layer.route.path}`);
-        routeCount++;
-      }
-    });
-    console.log(`\n   Total routes: ${routeCount}`);
+
+// Get all learners
+app.get('/api/teacher/learners', async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('learners')
+      .select('*')
+      .order('created_at', { ascending: false });
+    
+    if (error) throw error;
+    
+    res.json(data);
+  } catch (error) {
+    console.error('Error fetching learners:', error);
+    res.status(500).json({ error: error.message });
   }
-} catch (err) {
-  console.log('   Could not list routes:', err.message);
-}
-console.log('='.repeat(60));
-
-// API info endpoint
-app.get('/api', (req, res) => {
-  res.json({
-    name: 'EduPortal API',
-    version: '1.0.0',
-    description: 'School Management System API',
-    environment: process.env.NODE_ENV,
-    baseUrl: `${req.protocol}://${req.get('host')}`,
-    endpoints: {
-      auth: '/api/auth',
-      learners: '/api/learners',
-      reports: '/api/reports',
-      attendance: '/api/attendance',
-      dashboard: '/api/dashboard',
-      admin: '/api/admin',
-      health: '/health',
-      test: '/test'
-    }
-  });
 });
 
-// Root endpoint
-app.get('/', (req, res) => {
-  res.redirect('/api');
+// Add learner
+app.post('/api/teacher/learners', async (req, res) => {
+  try {
+    const { name, grade, status } = req.body;
+    
+    // Generate registration number
+    const regNumber = `EDU-${new Date().getFullYear()}-${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`;
+    
+    const { data, error } = await supabase
+      .from('learners')
+      .insert([{ name: name?.trim(), reg_number: regNumber, grade, status }])
+      .select();
+    
+    if (error) throw error;
+    
+    res.json({ success: true, learner: data[0] });
+  } catch (error) {
+    console.error('Error adding learner:', error);
+    res.status(500).json({ error: error.message });
+  }
 });
 
-// 404 handler
+// Get reports
+app.get('/api/teacher/reports', async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('reports')
+      .select('*, learners(name, reg_number)')
+      .order('generated_date', { ascending: false });
+    
+    if (error) throw error;
+    
+    res.json(data);
+  } catch (error) {
+    console.error('Error fetching reports:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Create report
+app.post('/api/teacher/reports', async (req, res) => {
+  try {
+    const { learnerId, term, grade, subjects, comment } = req.body;
+    
+    const { data, error } = await supabase
+      .from('reports')
+      .insert([{
+        learner_id: learnerId,
+        term,
+        grade,
+        subjects,
+        comment,
+        generated_date: new Date().toISOString()
+      }])
+      .select();
+    
+    if (error) throw error;
+    
+    res.json({ success: true, report: data[0] });
+  } catch (error) {
+    console.error('Error creating report:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get attendance
+app.get('/api/teacher/attendance', async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('attendance')
+      .select('*, learners(name)')
+      .order('date', { ascending: false });
+    
+    if (error) throw error;
+    
+    res.json(data);
+  } catch (error) {
+    console.error('Error fetching attendance:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Record attendance
+app.post('/api/teacher/attendance', async (req, res) => {
+  try {
+    const { learnerId, date, status } = req.body;
+    
+    // Upsert (insert or update)
+    const { data, error } = await supabase
+      .from('attendance')
+      .upsert([{ learner_id: learnerId, date, status }], { onConflict: 'learner_id,date' })
+      .select();
+    
+    if (error) throw error;
+    
+    res.json({ success: true, attendance: data[0] });
+  } catch (error) {
+    console.error('Error recording attendance:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============================================
+// LEARNER ROUTES
+// ============================================
+
+// Get learner profile
+app.get('/api/learner/profile', async (req, res) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  
+  if (!token) {
+    return res.status(401).json({ error: 'No token provided' });
+  }
+  
+  try {
+    const decoded = JSON.parse(Buffer.from(token, 'base64').toString());
+    
+    const { data, error } = await supabase
+      .from('learners')
+      .select('*')
+      .eq('id', decoded.id)
+      .single();
+    
+    if (error) throw error;
+    
+    res.json(data);
+  } catch (error) {
+    console.error('Error fetching profile:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get learner reports
+app.get('/api/learner/reports', async (req, res) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  
+  if (!token) {
+    return res.status(401).json({ error: 'No token provided' });
+  }
+  
+  try {
+    const decoded = JSON.parse(Buffer.from(token, 'base64').toString());
+    
+    const { data, error } = await supabase
+      .from('reports')
+      .select('*')
+      .eq('learner_id', decoded.id)
+      .order('generated_date', { ascending: false });
+    
+    if (error) throw error;
+    
+    res.json(data);
+  } catch (error) {
+    console.error('Error fetching reports:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get learner attendance
+app.get('/api/learner/attendance', async (req, res) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  
+  if (!token) {
+    return res.status(401).json({ error: 'No token provided' });
+  }
+  
+  try {
+    const decoded = JSON.parse(Buffer.from(token, 'base64').toString());
+    
+    const { data, error } = await supabase
+      .from('attendance')
+      .select('*')
+      .eq('learner_id', decoded.id)
+      .order('date', { ascending: false });
+    
+    if (error) throw error;
+    
+    res.json(data);
+  } catch (error) {
+    console.error('Error fetching attendance:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============================================
+// 404 Handler
+// ============================================
 app.use((req, res) => {
   console.log(`404 - ${req.method} ${req.path} - Not found`);
   res.status(404).json({ 
     success: false,
     message: 'Route not found',
     path: req.path,
-    method: req.method,
-    timestamp: new Date().toISOString()
+    method: req.method
   });
 });
 
 // ============================================
-// ENHANCED ERROR HANDLING
+// Error Handler
 // ============================================
 app.use((err, req, res, next) => {
-  console.error('🔥 Error:', {
-    message: err.message,
-    stack: process.env.NODE_ENV === 'development' ? err.stack : '🔒 Hidden',
-    path: req.path,
-    method: req.method,
-    timestamp: new Date().toISOString()
-  });
-
-  // Rate limit errors
-  if (err.code === 'RATE_LIMIT_EXCEEDED' || err.status === 429) {
-    return res.status(429).json({ 
-      success: false,
-      message: 'Too many requests. Please slow down.',
-      retryAfter: err.retryAfter || 60
-    });
-  }
-
-  // Validation errors
-  if (err.name === 'ValidationError') {
-    return res.status(400).json({ 
-      success: false,
-      message: 'Validation error', 
-      errors: err.errors 
-    });
-  }
-
-  // JWT errors
-  if (err.name === 'UnauthorizedError' || err.name === 'JsonWebTokenError') {
-    return res.status(401).json({ 
-      success: false,
-      message: 'Invalid or expired token' 
-    });
-  }
-
-  // Supabase errors
-  if (err.code === 'PGRST116') {
-    return res.status(404).json({ 
-      success: false,
-      message: 'Resource not found' 
-    });
-  }
-
-  if (err.code === '23505') { // Unique violation
-    return res.status(409).json({ 
-      success: false,
-      message: 'Duplicate entry. This record already exists.' 
-    });
-  }
-
-  if (err.code === '23503') { // Foreign key violation
-    return res.status(400).json({ 
-      success: false,
-      message: 'Referenced record does not exist.' 
-    });
-  }
-
-  // Database connection errors
-  if (err.code === 'ECONNREFUSED' || err.code === 'ENOTFOUND') {
-    return res.status(503).json({ 
-      success: false,
-      message: 'Database connection failed. Please try again later.' 
-    });
-  }
-
-  // Default error
-  const status = err.status || 500;
-  const message = err.message || 'Internal server error';
+  console.error('🔥 Error:', err.message);
   
-  res.status(status).json({ 
+  res.status(err.status || 500).json({ 
     success: false,
-    message,
-    ...(process.env.NODE_ENV === 'development' && { 
-      stack: err.stack,
-      details: err.details 
-    })
+    message: err.message || 'Internal server error',
+    ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
   });
 });
 
@@ -478,51 +637,18 @@ app.use((err, req, res, next) => {
 // START SERVER
 // ============================================
 const PORT = process.env.PORT || 5000;
-const server = app.listen(PORT, '0.0.0.0', () => {
+app.listen(PORT, '0.0.0.0', () => {
   console.log('\n' + '='.repeat(60));
   console.log(`🚀 SERVER STARTED SUCCESSFULLY`);
   console.log('='.repeat(60));
-  console.log(`\n📡 Environment: ${process.env.NODE_ENV || 'development'}`);
-  console.log(`📡 Port: ${PORT}`);
-  console.log(`📡 Supabase: ${process.env.SUPABASE_URL ? '✅ Connected' : '❌ Not configured'}`);
+  console.log(`\n📡 Port: ${PORT}`);
+  console.log(`📡 Supabase: ${process.env.SUPABASE_URL ? '✅ Configured' : '❌ Not configured'}`);
   console.log(`\n📍 Available endpoints:`);
-  console.log(`   - Health:    ${process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`}/health`);
-  console.log(`   - API Info:  ${process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`}/api`);
-  console.log(`   - Test:      ${process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`}/test`);
-  console.log(`   - Auth Test: ${process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`}/api/auth/test`);
-  console.log(`   - Learner Login: ${process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`}/api/auth/learner/login`);
-  console.log(`\n📊 Server ready to accept connections`);
-  console.log(`🌍 Public URL: ${process.env.RENDER_EXTERNAL_URL || 'http://localhost:' + PORT}`);
+  console.log(`   - Health:    http://localhost:${PORT}/health`);
+  console.log(`   - API Info:  http://localhost:${PORT}/api`);
+  console.log(`   - Test:      http://localhost:${PORT}/test`);
+  console.log(`   - Auth Test: http://localhost:${PORT}/api/auth/teacher/login`);
   console.log('='.repeat(60));
-});
-
-// ============================================
-// GRACEFUL SHUTDOWN
-// ============================================
-const gracefulShutdown = () => {
-  console.log('\n🛑 Received shutdown signal, closing server...');
-  server.close(() => {
-    console.log('✅ HTTP server closed');
-    process.exit(0);
-  });
-  
-  setTimeout(() => {
-    console.error('❌ Could not close connections in time, forcefully shutting down');
-    process.exit(1);
-  }, 10000);
-};
-
-process.on('SIGTERM', gracefulShutdown);
-process.on('SIGINT', gracefulShutdown);
-
-// Handle unhandled rejections
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('💥 Unhandled Rejection at:', promise, 'reason:', reason);
-});
-
-// Handle uncaught exceptions
-process.on('uncaughtException', (error) => {
-  console.error('💥 Uncaught Exception:', error);
 });
 
 module.exports = app;
