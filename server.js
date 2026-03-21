@@ -425,7 +425,10 @@ app.post('/api/teacher/learners', async (req, res) => {
       .insert([{ name: name?.trim(), reg_number: regNumber, grade, status }])
       .select();
     
-    if (error) throw error;
+    if (error) {
+      console.error('Supabase insert error:', error);
+      return res.status(500).json({ error: error.message });
+    }
     
     res.json({ success: true, learner: data[0] });
   } catch (error) {
@@ -461,7 +464,10 @@ app.get('/api/teacher/reports', async (req, res) => {
       .select('*, learners(name, reg_number)')
       .order('generated_date', { ascending: false });
     
-    if (error) throw error;
+    if (error) {
+      console.error('Error fetching reports:', error);
+      return res.status(500).json({ error: error.message });
+    }
     
     res.json(data);
   } catch (error) {
@@ -470,25 +476,61 @@ app.get('/api/teacher/reports', async (req, res) => {
   }
 });
 
-// Create report
+// Create report - FIXED with better validation
 app.post('/api/teacher/reports', async (req, res) => {
   try {
     const { learnerId, term, grade, subjects, comment } = req.body;
     
+    console.log('📝 Creating report with data:', { learnerId, term, grade, subjectsCount: subjects?.length, comment });
+    
+    // Validate required fields
+    if (!learnerId) {
+      return res.status(400).json({ error: 'learnerId is required' });
+    }
+    if (!term) {
+      return res.status(400).json({ error: 'term is required' });
+    }
+    if (!grade) {
+      return res.status(400).json({ error: 'grade is required' });
+    }
+    if (!subjects || !Array.isArray(subjects)) {
+      return res.status(400).json({ error: 'subjects must be an array' });
+    }
+    
+    // Check if learner exists
+    const { data: learner, error: learnerError } = await supabase
+      .from('learners')
+      .select('id')
+      .eq('id', learnerId)
+      .single();
+    
+    if (learnerError || !learner) {
+      console.error('Learner not found:', learnerId);
+      return res.status(404).json({ error: 'Learner not found' });
+    }
+    
+    const reportData = {
+      learner_id: learnerId,
+      term: term,
+      grade: grade,
+      subjects: subjects,
+      comment: comment || '',
+      generated_date: new Date().toISOString()
+    };
+    
+    console.log('📤 Inserting report:', reportData);
+    
     const { data, error } = await supabase
       .from('reports')
-      .insert([{
-        learner_id: learnerId,
-        term,
-        grade,
-        subjects,
-        comment,
-        generated_date: new Date().toISOString()
-      }])
+      .insert([reportData])
       .select();
     
-    if (error) throw error;
+    if (error) {
+      console.error('Supabase insert error:', error);
+      return res.status(500).json({ error: error.message, details: error.details });
+    }
     
+    console.log('✅ Report created successfully:', data[0]?.id);
     res.json({ success: true, report: data[0] });
   } catch (error) {
     console.error('Error creating report:', error);
@@ -523,7 +565,10 @@ app.get('/api/teacher/attendance', async (req, res) => {
       .select('*, learners(name)')
       .order('date', { ascending: false });
     
-    if (error) throw error;
+    if (error) {
+      console.error('Error fetching attendance:', error);
+      return res.status(500).json({ error: error.message });
+    }
     
     res.json(data);
   } catch (error) {
@@ -532,18 +577,64 @@ app.get('/api/teacher/attendance', async (req, res) => {
   }
 });
 
-// Record attendance
+// Record attendance - FIXED with better validation
 app.post('/api/teacher/attendance', async (req, res) => {
   try {
     const { learnerId, date, status } = req.body;
     
+    console.log('📝 Recording attendance:', { learnerId, date, status });
+    
+    // Validate required fields
+    if (!learnerId) {
+      return res.status(400).json({ error: 'learnerId is required' });
+    }
+    if (!date) {
+      return res.status(400).json({ error: 'date is required' });
+    }
+    if (!status) {
+      return res.status(400).json({ error: 'status is required' });
+    }
+    
+    // Validate status
+    const validStatuses = ['present', 'absent', 'late'];
+    if (!validStatuses.includes(status)) {
+      return res.status(400).json({ error: 'Invalid status. Must be present, absent, or late' });
+    }
+    
+    // Check if learner exists
+    const { data: learner, error: learnerError } = await supabase
+      .from('learners')
+      .select('id')
+      .eq('id', learnerId)
+      .single();
+    
+    if (learnerError || !learner) {
+      console.error('Learner not found:', learnerId);
+      return res.status(404).json({ error: 'Learner not found' });
+    }
+    
+    const attendanceData = {
+      learner_id: learnerId,
+      date: date,
+      status: status
+    };
+    
+    console.log('📤 Upserting attendance:', attendanceData);
+    
     const { data, error } = await supabase
       .from('attendance')
-      .upsert([{ learner_id: learnerId, date, status }], { onConflict: 'learner_id,date' })
+      .upsert(
+        [attendanceData],
+        { onConflict: 'learner_id,date', ignoreDuplicates: false }
+      )
       .select();
     
-    if (error) throw error;
+    if (error) {
+      console.error('Supabase upsert error:', error);
+      return res.status(500).json({ error: error.message, details: error.details });
+    }
     
+    console.log('✅ Attendance recorded successfully:', data[0]?.id);
     res.json({ success: true, attendance: data[0] });
   } catch (error) {
     console.error('Error recording attendance:', error);
@@ -743,7 +834,6 @@ app.get('/api/learner/dashboard/stats', async (req, res) => {
 // Redirect /learner/* to /api/learner/*
 app.get('/learner/attendance', async (req, res) => {
   console.log('🔄 Redirecting: /learner/attendance -> /api/learner/attendance');
-  // Forward the request to the actual handler
   const token = req.headers.authorization;
   if (!token) {
     return res.status(401).json({ error: 'No token provided' });
@@ -933,19 +1023,16 @@ app.listen(PORT, () => {
   console.log(`🧪 Test endpoint: http://localhost:${PORT}/test`);
   console.log('='.repeat(60));
   
-  // Log all registered routes for debugging (safe version)
+  // Log all registered routes for debugging
   console.log('\n📋 Registered API routes:');
   const routes = [];
   
-  // Safely collect routes from app._router
   if (app._router && app._router.stack) {
     app._router.stack.forEach((middleware) => {
       if (middleware.route) {
-        // Routes registered directly on app
         const methods = Object.keys(middleware.route.methods).join(',').toUpperCase();
         routes.push(`${methods} ${middleware.route.path}`);
       } else if (middleware.name === 'bound dispatch' && middleware.handle && middleware.handle.stack) {
-        // Router middleware
         middleware.handle.stack.forEach((handler) => {
           if (handler.route) {
             const methods = Object.keys(handler.route.methods).join(',').toUpperCase();
@@ -958,8 +1045,6 @@ app.listen(PORT, () => {
   
   if (routes.length > 0) {
     routes.sort().forEach(route => console.log(`   ${route}`));
-  } else {
-    console.log('   (Routes will be available on request)');
   }
   
   console.log('\n🔄 Compatibility routes enabled:');
