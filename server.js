@@ -741,34 +741,155 @@ app.get('/api/learner/dashboard/stats', async (req, res) => {
 // ============================================
 
 // Redirect /learner/* to /api/learner/*
-app.get('/learner/attendance', (req, res) => {
+app.get('/learner/attendance', async (req, res) => {
   console.log('🔄 Redirecting: /learner/attendance -> /api/learner/attendance');
-  req.url = '/api/learner/attendance';
-  app._router.handle(req, res);
+  // Forward the request to the actual handler
+  const token = req.headers.authorization;
+  if (!token) {
+    return res.status(401).json({ error: 'No token provided' });
+  }
+  
+  try {
+    const decoded = JSON.parse(Buffer.from(token.split(' ')[1], 'base64').toString());
+    
+    const { data, error } = await supabase
+      .from('attendance')
+      .select('*')
+      .eq('learner_id', decoded.id)
+      .order('date', { ascending: false });
+    
+    if (error) throw error;
+    res.json(data);
+  } catch (error) {
+    console.error('Error fetching attendance:', error);
+    res.status(500).json({ error: error.message });
+  }
 });
 
-app.get('/learner/reports', (req, res) => {
+app.get('/learner/reports', async (req, res) => {
   console.log('🔄 Redirecting: /learner/reports -> /api/learner/reports');
-  req.url = '/api/learner/reports';
-  app._router.handle(req, res);
+  const token = req.headers.authorization;
+  if (!token) {
+    return res.status(401).json({ error: 'No token provided' });
+  }
+  
+  try {
+    const decoded = JSON.parse(Buffer.from(token.split(' ')[1], 'base64').toString());
+    
+    const { data, error } = await supabase
+      .from('reports')
+      .select('*')
+      .eq('learner_id', decoded.id)
+      .order('generated_date', { ascending: false });
+    
+    if (error) throw error;
+    res.json(data);
+  } catch (error) {
+    console.error('Error fetching reports:', error);
+    res.status(500).json({ error: error.message });
+  }
 });
 
-app.get('/learners/reports', (req, res) => {
+app.get('/learners/reports', async (req, res) => {
   console.log('🔄 Redirecting: /learners/reports -> /api/learner/reports');
-  req.url = '/api/learner/reports';
-  app._router.handle(req, res);
+  const token = req.headers.authorization;
+  if (!token) {
+    return res.status(401).json({ error: 'No token provided' });
+  }
+  
+  try {
+    const decoded = JSON.parse(Buffer.from(token.split(' ')[1], 'base64').toString());
+    
+    const { data, error } = await supabase
+      .from('reports')
+      .select('*')
+      .eq('learner_id', decoded.id)
+      .order('generated_date', { ascending: false });
+    
+    if (error) throw error;
+    res.json(data);
+  } catch (error) {
+    console.error('Error fetching reports:', error);
+    res.status(500).json({ error: error.message });
+  }
 });
 
-app.get('/learner/profile', (req, res) => {
+app.get('/learner/profile', async (req, res) => {
   console.log('🔄 Redirecting: /learner/profile -> /api/learner/profile');
-  req.url = '/api/learner/profile';
-  app._router.handle(req, res);
+  const token = req.headers.authorization;
+  if (!token) {
+    return res.status(401).json({ error: 'No token provided' });
+  }
+  
+  try {
+    const decoded = JSON.parse(Buffer.from(token.split(' ')[1], 'base64').toString());
+    
+    const { data, error } = await supabase
+      .from('learners')
+      .select('*')
+      .eq('id', decoded.id)
+      .single();
+    
+    if (error) throw error;
+    res.json(data);
+  } catch (error) {
+    console.error('Error fetching profile:', error);
+    res.status(500).json({ error: error.message });
+  }
 });
 
-app.get('/learner/dashboard/stats', (req, res) => {
+app.get('/learner/dashboard/stats', async (req, res) => {
   console.log('🔄 Redirecting: /learner/dashboard/stats -> /api/learner/dashboard/stats');
-  req.url = '/api/learner/dashboard/stats';
-  app._router.handle(req, res);
+  const token = req.headers.authorization;
+  if (!token) {
+    return res.status(401).json({ error: 'No token provided' });
+  }
+  
+  try {
+    const decoded = JSON.parse(Buffer.from(token.split(' ')[1], 'base64').toString());
+    
+    const { data: reports, error: reportsError } = await supabase
+      .from('reports')
+      .select('*')
+      .eq('learner_id', decoded.id);
+    
+    if (reportsError) throw reportsError;
+    
+    const { data: attendance, error: attendanceError } = await supabase
+      .from('attendance')
+      .select('*')
+      .eq('learner_id', decoded.id);
+    
+    if (attendanceError) throw attendanceError;
+    
+    let attendanceRate = 0;
+    if (attendance.length > 0) {
+      const presentCount = attendance.filter(a => a.status === 'present' || a.status === 'late').length;
+      attendanceRate = Math.round(presentCount / attendance.length * 100);
+    }
+    
+    let averageScore = null;
+    if (reports.length > 0) {
+      const latest = reports[reports.length - 1];
+      if (latest.subjects && latest.subjects.length > 0) {
+        const sum = latest.subjects.reduce((acc, s) => acc + (s.score || 0), 0);
+        averageScore = Math.round(sum / latest.subjects.length);
+      }
+    }
+    
+    res.json({
+      reportsCount: reports.length,
+      attendanceRate: attendanceRate,
+      averageScore: averageScore,
+      totalDays: attendance.length,
+      presentCount: attendance.filter(a => a.status === 'present').length,
+      lateCount: attendance.filter(a => a.status === 'late').length,
+      absentCount: attendance.filter(a => a.status === 'absent').length
+    });
+  } catch (error) {
+    console.error('Learner dashboard stats error:', error);
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // ============================================
@@ -812,23 +933,41 @@ app.listen(PORT, () => {
   console.log(`🧪 Test endpoint: http://localhost:${PORT}/test`);
   console.log('='.repeat(60));
   
-  // Log all registered routes for debugging
-  console.log('\n📋 Registered routes:');
+  // Log all registered routes for debugging (safe version)
+  console.log('\n📋 Registered API routes:');
   const routes = [];
-  app._router.stack.forEach((middleware) => {
-    if (middleware.route) {
-      // Routes registered directly on app
-      routes.push(`${Object.keys(middleware.route.methods)} ${middleware.route.path}`);
-    } else if (middleware.name === 'bound dispatch' && middleware.handle.stack) {
-      // Router middleware
-      middleware.handle.stack.forEach((handler) => {
-        if (handler.route) {
-          routes.push(`${Object.keys(handler.route.methods)} ${handler.route.path}`);
-        }
-      });
-    }
-  });
-  routes.sort().forEach(route => console.log(`   ${route}`));
+  
+  // Safely collect routes from app._router
+  if (app._router && app._router.stack) {
+    app._router.stack.forEach((middleware) => {
+      if (middleware.route) {
+        // Routes registered directly on app
+        const methods = Object.keys(middleware.route.methods).join(',').toUpperCase();
+        routes.push(`${methods} ${middleware.route.path}`);
+      } else if (middleware.name === 'bound dispatch' && middleware.handle && middleware.handle.stack) {
+        // Router middleware
+        middleware.handle.stack.forEach((handler) => {
+          if (handler.route) {
+            const methods = Object.keys(handler.route.methods).join(',').toUpperCase();
+            routes.push(`${methods} ${handler.route.path}`);
+          }
+        });
+      }
+    });
+  }
+  
+  if (routes.length > 0) {
+    routes.sort().forEach(route => console.log(`   ${route}`));
+  } else {
+    console.log('   (Routes will be available on request)');
+  }
+  
+  console.log('\n🔄 Compatibility routes enabled:');
+  console.log('   GET /learner/attendance');
+  console.log('   GET /learner/reports');
+  console.log('   GET /learners/reports');
+  console.log('   GET /learner/profile');
+  console.log('   GET /learner/dashboard/stats');
   console.log('='.repeat(60));
 });
 
