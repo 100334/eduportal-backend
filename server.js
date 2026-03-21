@@ -204,6 +204,45 @@ app.get('/api/health', async (req, res) => {
 // DEBUG ENDPOINTS
 // ============================================
 
+// Debug endpoint to check learners table structure
+app.get('/api/debug/learners-table', async (req, res) => {
+  try {
+    // Try to get a sample row
+    const { data: sample, error: sampleError } = await supabase
+      .from('learners')
+      .select('*')
+      .limit(1);
+    
+    if (sampleError) {
+      return res.json({ 
+        success: false, 
+        error: sampleError.message,
+        code: sampleError.code,
+        details: sampleError.details
+      });
+    }
+    
+    // Get column names from the data
+    let columns = [];
+    if (sample && sample.length > 0) {
+      columns = Object.keys(sample[0]);
+    }
+    
+    res.json({
+      success: true,
+      tableExists: true,
+      columns: columns,
+      hasData: sample && sample.length > 0,
+      sampleData: sample && sample.length > 0 ? sample[0] : null,
+      missingForm: !columns.includes('form'),
+      missingGrade: !columns.includes('grade'),
+      suggestion: !columns.includes('form') ? 'Need to add "form" column. Run: ALTER TABLE learners ADD COLUMN form TEXT;' : null
+    });
+  } catch (error) {
+    res.json({ success: false, error: error.message });
+  }
+});
+
 // Debug endpoint to test attendance with integer IDs
 app.get('/api/debug/attendance-test', async (req, res) => {
   try {
@@ -528,27 +567,79 @@ app.get('/api/teacher/learners', async (req, res) => {
   }
 });
 
-// Add learner - UPDATED to use form
+// Add learner - UPDATED with detailed error handling
 app.post('/api/teacher/learners', async (req, res) => {
   try {
+    console.log('='.repeat(60));
+    console.log('📝 ADD LEARNER REQUEST');
+    console.log('Request body:', JSON.stringify(req.body, null, 2));
+    
     const { name, form, status } = req.body;
     
+    // Validate required fields
+    if (!name) {
+      console.log('❌ Missing name');
+      return res.status(400).json({ error: 'Name is required' });
+    }
+    
+    // Generate registration number
     const regNumber = `EDU-${new Date().getFullYear()}-${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`;
+    console.log('Generated reg number:', regNumber);
+    
+    // Prepare learner data
+    const learnerData = {
+      name: name?.trim(),
+      reg_number: regNumber,
+      form: form || 'Form 1',
+      status: status || 'Active',
+      created_at: new Date().toISOString()
+    };
+    
+    console.log('Inserting learner:', learnerData);
     
     const { data, error } = await supabase
       .from('learners')
-      .insert([{ name: name?.trim(), reg_number: regNumber, form, status }])
+      .insert([learnerData])
       .select();
     
     if (error) {
-      console.error('Supabase insert error:', error);
-      return res.status(500).json({ error: error.message });
+      console.error('❌ Supabase insert error:', error);
+      console.error('  Code:', error.code);
+      console.error('  Message:', error.message);
+      console.error('  Details:', error.details);
+      console.error('  Hint:', error.hint);
+      
+      // Provide helpful error messages based on error code
+      if (error.code === '42703') {
+        return res.status(400).json({ 
+          error: 'Column does not exist in learners table',
+          details: error.message,
+          suggestion: 'Check if "form" column exists. Run: ALTER TABLE learners ADD COLUMN form TEXT;'
+        });
+      } else if (error.code === '23502') {
+        return res.status(400).json({ 
+          error: 'Required field is missing',
+          details: error.message,
+          suggestion: 'Make sure all required fields are provided'
+        });
+      }
+      
+      return res.status(500).json({ 
+        error: error.message, 
+        details: error.details,
+        code: error.code,
+        hint: error.hint
+      });
     }
+    
+    console.log('✅ Learner added successfully:', data[0]);
+    console.log('='.repeat(60));
     
     res.json({ success: true, learner: data[0] });
   } catch (error) {
-    console.error('Error adding learner:', error);
-    res.status(500).json({ error: error.message });
+    console.error('❌ CATCH BLOCK ERROR:', error);
+    console.error('Stack:', error.stack);
+    res.status(500).json({ error: error.message, stack: error.stack });
   }
 });
 
@@ -1309,6 +1400,7 @@ app.listen(PORT, () => {
   console.log('\n🔧 Debug endpoints:');
   console.log('   GET /api/debug/learners');
   console.log('   GET /api/debug/attendance-test');
+  console.log('   GET /api/debug/learners-table');
   console.log('='.repeat(60));
 });
 
