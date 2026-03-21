@@ -572,23 +572,16 @@ app.delete('/api/teacher/learners/:id', async (req, res) => {
 });
 
 // ============================================
-// REPORTS ROUTES - UPDATED FOR FULL SCHEMA
+// REPORTS ROUTES - FIXED (No foreign key join)
 // ============================================
 
-// Get all reports
+// Get all reports - FIXED without foreign key join
 app.get('/api/teacher/reports', async (req, res) => {
   try {
-    const { data, error } = await supabase
+    // Fetch all reports without join
+    const { data: reports, error } = await supabase
       .from('reports')
-      .select(`
-        *,
-        learners:learner_id (
-          id,
-          name,
-          reg_number,
-          grade
-        )
-      `)
+      .select('*')
       .order('generated_date', { ascending: false });
     
     if (error) {
@@ -596,39 +589,55 @@ app.get('/api/teacher/reports', async (req, res) => {
       return res.status(500).json({ error: error.message });
     }
     
-    res.json(data);
+    // If we have reports, get learner names separately
+    if (reports && reports.length > 0) {
+      const learnerIds = [...new Set(reports.map(r => r.learner_id).filter(Boolean))];
+      
+      if (learnerIds.length > 0) {
+        const { data: learners, error: learnersError } = await supabase
+          .from('learners')
+          .select('id, name, reg_number')
+          .in('id', learnerIds);
+        
+        if (!learnersError && learners) {
+          const learnerMap = {};
+          learners.forEach(learner => {
+            learnerMap[learner.id] = learner;
+          });
+          
+          const reportsWithLearners = reports.map(report => ({
+            ...report,
+            learners: learnerMap[report.learner_id] || null
+          }));
+          
+          return res.json(reportsWithLearners);
+        }
+      }
+    }
+    
+    res.json(reports || []);
   } catch (error) {
-    console.error('Error fetching reports:', error);
+    console.error('Unexpected error in reports endpoint:', error);
     res.status(500).json({ error: error.message });
   }
 });
 
-// Create report - UPDATED for full schema
+// Create report
 app.post('/api/teacher/reports', async (req, res) => {
   try {
     const { 
       learnerId, 
       term, 
-      academic_year,
       grade, 
       subjects, 
-      comment,
-      teacher_comment,
-      principal_comment,
-      attendance_days,
-      days_present,
-      total_score,
-      average_score
+      comment 
     } = req.body;
     
     console.log('📝 Creating report with data:', { 
       learnerId, 
       term, 
-      academic_year,
       grade, 
-      subjectsCount: subjects?.length,
-      total_score,
-      average_score
+      subjectsCount: subjects?.length
     });
     
     // Validate required fields
@@ -657,27 +666,21 @@ app.post('/api/teacher/reports', async (req, res) => {
       return res.status(404).json({ error: 'Learner not found' });
     }
     
-    // Calculate scores if not provided
-    const calculatedTotalScore = total_score !== undefined ? total_score : subjects.reduce((sum, s) => sum + (s.score || 0), 0);
-    const calculatedAverageScore = average_score !== undefined ? average_score : (subjects.length ? Math.round(calculatedTotalScore / subjects.length) : 0);
+    // Calculate scores
+    const totalScore = subjects.reduce((sum, s) => sum + (s.score || 0), 0);
+    const averageScore = subjects.length ? Math.round(totalScore / subjects.length) : 0;
     
     const reportData = {
       learner_id: learnerId,
       term: term,
-      academic_year: academic_year || new Date().getFullYear().toString(),
       grade: grade,
       subjects: subjects,
-      total_score: calculatedTotalScore,
-      average_score: calculatedAverageScore,
-      comment: comment || teacher_comment || '',
-      teacher_comment: teacher_comment || comment || '',
-      principal_comment: principal_comment || '',
-      attendance_days: attendance_days || 0,
-      days_present: days_present || 0,
+      total_score: totalScore,
+      average_score: averageScore,
+      comment: comment || '',
       generated_date: new Date().toISOString(),
       created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-      is_finalized: false
+      updated_at: new Date().toISOString()
     };
     
     console.log('📤 Inserting report:', reportData);
@@ -705,17 +708,9 @@ app.get('/api/teacher/reports/:id', async (req, res) => {
   try {
     const { id } = req.params;
     
-    const { data, error } = await supabase
+    const { data: report, error } = await supabase
       .from('reports')
-      .select(`
-        *,
-        learners:learner_id (
-          id,
-          name,
-          reg_number,
-          grade
-        )
-      `)
+      .select('*')
       .eq('id', id)
       .single();
     
@@ -724,7 +719,18 @@ app.get('/api/teacher/reports/:id', async (req, res) => {
       return res.status(404).json({ error: 'Report not found' });
     }
     
-    res.json(data);
+    // Get learner info separately
+    if (report && report.learner_id) {
+      const { data: learner } = await supabase
+        .from('learners')
+        .select('id, name, reg_number')
+        .eq('id', report.learner_id)
+        .single();
+      
+      return res.json({ ...report, learners: learner });
+    }
+    
+    res.json(report);
   } catch (error) {
     console.error('Error fetching report:', error);
     res.status(500).json({ error: error.message });
@@ -750,45 +756,17 @@ app.delete('/api/teacher/reports/:id', async (req, res) => {
   }
 });
 
-// Update report (finalize, add comments, etc.)
-app.put('/api/teacher/reports/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { is_finalized, teacher_comment, principal_comment } = req.body;
-    
-    const updateData = {
-      updated_at: new Date().toISOString()
-    };
-    
-    if (is_finalized !== undefined) updateData.is_finalized = is_finalized;
-    if (teacher_comment !== undefined) updateData.teacher_comment = teacher_comment;
-    if (principal_comment !== undefined) updateData.principal_comment = principal_comment;
-    
-    const { data, error } = await supabase
-      .from('reports')
-      .update(updateData)
-      .eq('id', id)
-      .select();
-    
-    if (error) throw error;
-    
-    res.json({ success: true, report: data[0] });
-  } catch (error) {
-    console.error('Error updating report:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
 // ============================================
-// ATTENDANCE ROUTES
+// ATTENDANCE ROUTES - FIXED (No foreign key join)
 // ============================================
 
-// Get all attendance
+// Get all attendance - FIXED without foreign key join
 app.get('/api/teacher/attendance', async (req, res) => {
   try {
-    const { data, error } = await supabase
+    // Fetch all attendance without join
+    const { data: attendance, error } = await supabase
       .from('attendance')
-      .select('*, learners(name, reg_number)')
+      .select('*')
       .order('date', { ascending: false });
     
     if (error) {
@@ -796,7 +774,33 @@ app.get('/api/teacher/attendance', async (req, res) => {
       return res.status(500).json({ error: error.message });
     }
     
-    res.json(data);
+    // Get learner names separately
+    if (attendance && attendance.length > 0) {
+      const learnerIds = [...new Set(attendance.map(a => a.learner_id).filter(Boolean))];
+      
+      if (learnerIds.length > 0) {
+        const { data: learners, error: learnersError } = await supabase
+          .from('learners')
+          .select('id, name, reg_number')
+          .in('id', learnerIds);
+        
+        if (!learnersError && learners) {
+          const learnerMap = {};
+          learners.forEach(learner => {
+            learnerMap[learner.id] = learner;
+          });
+          
+          const attendanceWithLearners = attendance.map(record => ({
+            ...record,
+            learners: learnerMap[record.learner_id] || null
+          }));
+          
+          return res.json(attendanceWithLearners);
+        }
+      }
+    }
+    
+    res.json(attendance || []);
   } catch (error) {
     console.error('Error fetching attendance:', error);
     res.status(500).json({ error: error.message });
@@ -827,6 +831,12 @@ app.post('/api/teacher/attendance', async (req, res) => {
       return res.status(400).json({ error: 'Invalid status. Must be present, absent, or late' });
     }
     
+    // Validate date format
+    const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+    if (!dateRegex.test(date)) {
+      return res.status(400).json({ error: 'Invalid date format. Use YYYY-MM-DD' });
+    }
+    
     // Check if learner exists
     const { data: learner, error: learnerError } = await supabase
       .from('learners')
@@ -849,24 +859,24 @@ app.post('/api/teacher/attendance', async (req, res) => {
     
     console.log('📤 Upserting attendance:', attendanceData);
     
+    // Delete existing record first (simpler approach)
+    await supabase
+      .from('attendance')
+      .delete()
+      .eq('learner_id', learnerId)
+      .eq('date', date);
+    
+    // Insert new record
     const { data, error } = await supabase
       .from('attendance')
-      .upsert(
-        [attendanceData],
-        { 
-          onConflict: 'learner_id,date',
-          ignoreDuplicates: false 
-        }
-      )
+      .insert([attendanceData])
       .select();
     
     if (error) {
-      console.error('Supabase upsert error:', error);
+      console.error('Supabase insert error:', error);
       return res.status(500).json({ 
         error: error.message,
-        details: error.details,
-        hint: error.hint,
-        code: error.code
+        details: error.details
       });
     }
     
