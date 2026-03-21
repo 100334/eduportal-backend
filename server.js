@@ -735,3 +735,101 @@ app.get('/api/learner/dashboard/stats', async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
+
+// ============================================
+// COMPATIBILITY ROUTES (For frontend without /api prefix)
+// ============================================
+
+// Redirect /learner/* to /api/learner/*
+app.get('/learner/attendance', (req, res) => {
+  console.log('🔄 Redirecting: /learner/attendance -> /api/learner/attendance');
+  req.url = '/api/learner/attendance';
+  app._router.handle(req, res);
+});
+
+app.get('/learner/reports', (req, res) => {
+  console.log('🔄 Redirecting: /learner/reports -> /api/learner/reports');
+  req.url = '/api/learner/reports';
+  app._router.handle(req, res);
+});
+
+app.get('/learners/reports', (req, res) => {
+  console.log('🔄 Redirecting: /learners/reports -> /api/learner/reports');
+  req.url = '/api/learner/reports';
+  app._router.handle(req, res);
+});
+
+app.get('/learner/profile', (req, res) => {
+  console.log('🔄 Redirecting: /learner/profile -> /api/learner/profile');
+  req.url = '/api/learner/profile';
+  app._router.handle(req, res);
+});
+
+app.get('/learner/dashboard/stats', (req, res) => {
+  console.log('🔄 Redirecting: /learner/dashboard/stats -> /api/learner/dashboard/stats');
+  req.url = '/api/learner/dashboard/stats';
+  app._router.handle(req, res);
+});
+
+// ============================================
+// 404 HANDLER
+// ============================================
+
+// Catch-all for undefined routes
+app.use((req, res) => {
+  console.log(`❌ Route not found: ${req.method} ${req.path}`);
+  res.status(404).json({ 
+    success: false, 
+    message: `Route not found: ${req.path}`,
+    tip: "Make sure you're using the correct API endpoint with /api prefix"
+  });
+});
+
+// ============================================
+// ERROR HANDLER
+// ============================================
+
+app.use((err, req, res, next) => {
+  console.error('Server error:', err);
+  res.status(500).json({ 
+    success: false, 
+    message: 'Internal server error',
+    error: process.env.NODE_ENV === 'development' ? err.message : undefined
+  });
+});
+
+// ============================================
+// START SERVER
+// ============================================
+
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, () => {
+  console.log('='.repeat(60));
+  console.log(`✅ Server is running on port ${PORT}`);
+  console.log(`📡 API URL: http://localhost:${PORT}/api`);
+  console.log(`🏥 Health check: http://localhost:${PORT}/health`);
+  console.log(`🧪 Test endpoint: http://localhost:${PORT}/test`);
+  console.log('='.repeat(60));
+  
+  // Log all registered routes for debugging
+  console.log('\n📋 Registered routes:');
+  const routes = [];
+  app._router.stack.forEach((middleware) => {
+    if (middleware.route) {
+      // Routes registered directly on app
+      routes.push(`${Object.keys(middleware.route.methods)} ${middleware.route.path}`);
+    } else if (middleware.name === 'bound dispatch' && middleware.handle.stack) {
+      // Router middleware
+      middleware.handle.stack.forEach((handler) => {
+        if (handler.route) {
+          routes.push(`${Object.keys(handler.route.methods)} ${handler.route.path}`);
+        }
+      });
+    }
+  });
+  routes.sort().forEach(route => console.log(`   ${route}`));
+  console.log('='.repeat(60));
+});
+
+module.exports = app;
