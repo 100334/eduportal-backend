@@ -260,12 +260,12 @@ app.get('/api/debug/attendance-test', async (req, res) => {
   }
 });
 
-// Debug endpoint to check learners
+// Debug endpoint to check learners - UPDATED to show form
 app.get('/api/debug/learners', async (req, res) => {
   try {
     const { data: learners, error } = await supabase
       .from('learners')
-      .select('id, name, reg_number, grade, status');
+      .select('id, name, reg_number, form, status');
     
     if (error) throw error;
     
@@ -357,7 +357,7 @@ app.post('/api/auth/teacher/login', async (req, res) => {
   }
 });
 
-// Learner login
+// Learner login - UPDATED to use form
 app.post('/api/auth/learner/login', async (req, res) => {
   try {
     const { name, regNumber } = req.body;
@@ -384,7 +384,7 @@ app.post('/api/auth/learner/login', async (req, res) => {
       if (allLearners && allLearners.length > 0) {
         console.log('📋 All learners in DB (first 10):');
         allLearners.slice(0, 10).forEach(learner => {
-          console.log(`   ID:${learner.id} | Name:${learner.name} | Reg:${learner.reg_number} | Status:${learner.status}`);
+          console.log(`   ID:${learner.id} | Name:${learner.name} | Reg:${learner.reg_number} | Form:${learner.form} | Status:${learner.status}`);
         });
       }
     }
@@ -461,7 +461,7 @@ app.post('/api/auth/learner/login', async (req, res) => {
       id: learner.id,
       name: learner.name,
       reg: learner.reg_number,
-      grade: learner.grade
+      form: learner.form
     });
     
     const token = Buffer.from(JSON.stringify({ 
@@ -477,7 +477,7 @@ app.post('/api/auth/learner/login', async (req, res) => {
         id: learner.id,
         name: learner.name,
         reg: learner.reg_number,
-        grade: learner.grade,
+        form: learner.form,
         status: learner.status
       }
     });
@@ -508,7 +508,7 @@ app.get('/api/auth/verify', async (req, res) => {
 });
 
 // ============================================
-// TEACHER ROUTES
+// TEACHER ROUTES - UPDATED TO USE FORM
 // ============================================
 
 // Get all learners
@@ -528,16 +528,16 @@ app.get('/api/teacher/learners', async (req, res) => {
   }
 });
 
-// Add learner
+// Add learner - UPDATED to use form
 app.post('/api/teacher/learners', async (req, res) => {
   try {
-    const { name, grade, status } = req.body;
+    const { name, form, status } = req.body;
     
     const regNumber = `EDU-${new Date().getFullYear()}-${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`;
     
     const { data, error } = await supabase
       .from('learners')
-      .insert([{ name: name?.trim(), reg_number: regNumber, grade, status }])
+      .insert([{ name: name?.trim(), reg_number: regNumber, form, status }])
       .select();
     
     if (error) {
@@ -572,7 +572,7 @@ app.delete('/api/teacher/learners/:id', async (req, res) => {
 });
 
 // ============================================
-// REPORTS ROUTES - FIXED (No foreign key join)
+// REPORTS ROUTES - UPDATED TO USE FORM
 // ============================================
 
 // Get all reports - FIXED without foreign key join
@@ -596,7 +596,7 @@ app.get('/api/teacher/reports', async (req, res) => {
       if (learnerIds.length > 0) {
         const { data: learners, error: learnersError } = await supabase
           .from('learners')
-          .select('id, name, reg_number')
+          .select('id, name, reg_number, form')
           .in('id', learnerIds);
         
         if (!learnersError && learners) {
@@ -622,13 +622,13 @@ app.get('/api/teacher/reports', async (req, res) => {
   }
 });
 
-// Create report
+// Create report - UPDATED to use form
 app.post('/api/teacher/reports', async (req, res) => {
   try {
     const { 
       learnerId, 
       term, 
-      grade, 
+      form, 
       subjects, 
       comment 
     } = req.body;
@@ -636,7 +636,7 @@ app.post('/api/teacher/reports', async (req, res) => {
     console.log('📝 Creating report with data:', { 
       learnerId, 
       term, 
-      grade, 
+      form, 
       subjectsCount: subjects?.length
     });
     
@@ -647,8 +647,8 @@ app.post('/api/teacher/reports', async (req, res) => {
     if (!term) {
       return res.status(400).json({ error: 'term is required' });
     }
-    if (!grade) {
-      return res.status(400).json({ error: 'grade is required' });
+    if (!form) {
+      return res.status(400).json({ error: 'form is required' });
     }
     if (!subjects || !Array.isArray(subjects)) {
       return res.status(400).json({ error: 'subjects must be an array' });
@@ -673,7 +673,7 @@ app.post('/api/teacher/reports', async (req, res) => {
     const reportData = {
       learner_id: learnerId,
       term: term,
-      grade: grade,
+      form: form,
       subjects: subjects,
       total_score: totalScore,
       average_score: averageScore,
@@ -703,7 +703,7 @@ app.post('/api/teacher/reports', async (req, res) => {
   }
 });
 
-// Get single report by ID
+// Get single report by ID - UPDATED to include form
 app.get('/api/teacher/reports/:id', async (req, res) => {
   try {
     const { id } = req.params;
@@ -723,7 +723,7 @@ app.get('/api/teacher/reports/:id', async (req, res) => {
     if (report && report.learner_id) {
       const { data: learner } = await supabase
         .from('learners')
-        .select('id, name, reg_number')
+        .select('id, name, reg_number, form')
         .eq('id', report.learner_id)
         .single();
       
@@ -757,7 +757,7 @@ app.delete('/api/teacher/reports/:id', async (req, res) => {
 });
 
 // ============================================
-// ATTENDANCE ROUTES - FIXED (No foreign key join)
+// ATTENDANCE ROUTES
 // ============================================
 
 // Get all attendance - FIXED without foreign key join
@@ -781,7 +781,7 @@ app.get('/api/teacher/attendance', async (req, res) => {
       if (learnerIds.length > 0) {
         const { data: learners, error: learnersError } = await supabase
           .from('learners')
-          .select('id, name, reg_number')
+          .select('id, name, reg_number, form')
           .in('id', learnerIds);
         
         if (!learnersError && learners) {
@@ -889,7 +889,7 @@ app.post('/api/teacher/attendance', async (req, res) => {
   }
 });
 
-// Teacher dashboard stats
+// Teacher dashboard stats - UPDATED to use form
 app.get('/api/teacher/dashboard/stats', async (req, res) => {
   try {
     const { data: learners, error: learnersError } = await supabase
@@ -924,12 +924,21 @@ app.get('/api/teacher/dashboard/stats', async (req, res) => {
     
     const avgAttendance = totalAtt ? Math.round(presentCount / totalAtt * 100) : 0;
     
+    // Count learners by form
+    const learnersByForm = {
+      'Form 1': learners.filter(l => l.form === 'Form 1').length,
+      'Form 2': learners.filter(l => l.form === 'Form 2').length,
+      'Form 3': learners.filter(l => l.form === 'Form 3').length,
+      'Form 4': learners.filter(l => l.form === 'Form 4').length
+    };
+    
     res.json({
       totalLearners: learners.length,
       totalReports: reports.length,
       averageAttendance: avgAttendance,
       activeLearners: learners.filter(l => l.status === 'Active').length,
-      pendingReports: reports.filter(r => !r.is_finalized).length
+      pendingReports: reports.filter(r => !r.is_finalized).length,
+      learnersByForm
     });
   } catch (error) {
     console.error('Dashboard stats error:', error);
@@ -938,7 +947,7 @@ app.get('/api/teacher/dashboard/stats', async (req, res) => {
 });
 
 // ============================================
-// LEARNER ROUTES
+// LEARNER ROUTES - UPDATED TO USE FORM
 // ============================================
 
 // Get learner profile
@@ -1019,7 +1028,7 @@ app.get('/api/learner/attendance', async (req, res) => {
   }
 });
 
-// Learner dashboard stats
+// Learner dashboard stats - UPDATED to use form
 app.get('/api/learner/dashboard/stats', async (req, res) => {
   const token = req.headers.authorization ? req.headers.authorization.split(' ')[1] : null;
   
