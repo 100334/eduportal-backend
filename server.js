@@ -123,6 +123,21 @@ console.log('='.repeat(60));
 // PUBLIC TEST ENDPOINTS
 // ============================================
 
+app.get('/', (req, res) => {
+  res.json({
+    success: true,
+    message: 'EduPortal API Server is running',
+    version: '1.0.0',
+    endpoints: {
+      health: '/health',
+      api_health: '/api/health',
+      test: '/test',
+      api_test: '/api/test',
+      api: '/api'
+    }
+  });
+});
+
 app.get('/test', (req, res) => {
   res.json({ 
     success: true,
@@ -130,6 +145,14 @@ app.get('/test', (req, res) => {
     time: new Date().toISOString(),
     env: process.env.NODE_ENV,
     supabase: supabase ? '✅ Connected' : '❌ Not configured'
+  });
+});
+
+app.get('/api/test', (req, res) => {
+  res.json({ 
+    success: true, 
+    message: 'API test endpoint is working!',
+    timestamp: new Date().toISOString()
   });
 });
 
@@ -152,6 +175,109 @@ app.get('/health', async (req, res) => {
       supabase: '❌ Connection failed',
       error: error.message
     });
+  }
+});
+
+app.get('/api/health', async (req, res) => {
+  try {
+    const { data, error } = await supabase.from('users').select('count').limit(1);
+    
+    res.status(200).json({ 
+      status: 'OK', 
+      timestamp: new Date().toISOString(),
+      environment: process.env.NODE_ENV,
+      uptime: process.uptime(),
+      supabase: error ? '❌ Error' : '✅ Connected',
+      supabase_error: error ? error.message : null
+    });
+  } catch (error) {
+    res.status(200).json({ 
+      status: 'Degraded', 
+      timestamp: new Date().toISOString(),
+      supabase: '❌ Connection failed',
+      error: error.message
+    });
+  }
+});
+
+// ============================================
+// DEBUG ENDPOINTS
+// ============================================
+
+// Debug endpoint to test attendance with integer IDs
+app.get('/api/debug/attendance-test', async (req, res) => {
+  try {
+    // Get first learner
+    const { data: learner, error: learnerError } = await supabase
+      .from('learners')
+      .select('id, name')
+      .limit(1)
+      .single();
+    
+    if (learnerError || !learner) {
+      return res.json({ 
+        success: false, 
+        error: 'No learners found in database',
+        details: learnerError?.message
+      });
+    }
+    
+    console.log('Found learner for test:', learner);
+    
+    // Test data
+    const testData = {
+      learner_id: learner.id,
+      date: new Date().toISOString().split('T')[0],
+      status: 'present'
+    };
+    
+    console.log('Test data:', testData);
+    
+    const { data, error } = await supabase
+      .from('attendance')
+      .upsert([testData], { onConflict: 'learner_id,date' })
+      .select();
+    
+    if (error) {
+      return res.json({ 
+        success: false, 
+        error: error.message,
+        details: error.details,
+        code: error.code,
+        hint: error.hint
+      });
+    }
+    
+    res.json({ 
+      success: true, 
+      message: 'Attendance test successful!',
+      learner: learner.name,
+      learnerId: learner.id,
+      record: data[0]
+    });
+    
+  } catch (error) {
+    console.error('Debug endpoint error:', error);
+    res.json({ success: false, error: error.message });
+  }
+});
+
+// Debug endpoint to check learners
+app.get('/api/debug/learners', async (req, res) => {
+  try {
+    const { data: learners, error } = await supabase
+      .from('learners')
+      .select('id, name, reg_number, grade, status');
+    
+    if (error) throw error;
+    
+    res.json({
+      success: true,
+      count: learners?.length || 0,
+      learners: learners
+    });
+  } catch (error) {
+    res.json({ success: false, error: error.message });
   }
 });
 
@@ -383,15 +509,6 @@ app.get('/api/auth/verify', async (req, res) => {
   }
 });
 
-// API test endpoint
-app.get('/api/test', (req, res) => {
-  res.json({ 
-    success: true, 
-    message: 'API test endpoint is working!',
-    timestamp: new Date().toISOString()
-  });
-});
-
 // ============================================
 // TEACHER ROUTES
 // ============================================
@@ -476,12 +593,12 @@ app.get('/api/teacher/reports', async (req, res) => {
   }
 });
 
-// Create report - FIXED with better validation
+// Create report
 app.post('/api/teacher/reports', async (req, res) => {
   try {
     const { learnerId, term, grade, subjects, comment } = req.body;
     
-    console.log('📝 Creating report with data:', { learnerId, term, grade, subjectsCount: subjects?.length, comment });
+    console.log('📝 Creating report with data:', { learnerId, term, grade, subjectsCount: subjects?.length });
     
     // Validate required fields
     if (!learnerId) {
@@ -577,7 +694,7 @@ app.get('/api/teacher/attendance', async (req, res) => {
   }
 });
 
-// Record attendance - FIXED with better validation
+// Record attendance - UPDATED for integer IDs
 app.post('/api/teacher/attendance', async (req, res) => {
   try {
     const { learnerId, date, status } = req.body;
@@ -604,7 +721,7 @@ app.post('/api/teacher/attendance', async (req, res) => {
     // Check if learner exists
     const { data: learner, error: learnerError } = await supabase
       .from('learners')
-      .select('id')
+      .select('id, name')
       .eq('id', learnerId)
       .single();
     
@@ -612,6 +729,8 @@ app.post('/api/teacher/attendance', async (req, res) => {
       console.error('Learner not found:', learnerId);
       return res.status(404).json({ error: 'Learner not found' });
     }
+    
+    console.log('✅ Learner found:', learner.name);
     
     const attendanceData = {
       learner_id: learnerId,
@@ -625,17 +744,26 @@ app.post('/api/teacher/attendance', async (req, res) => {
       .from('attendance')
       .upsert(
         [attendanceData],
-        { onConflict: 'learner_id,date', ignoreDuplicates: false }
+        { 
+          onConflict: 'learner_id,date',
+          ignoreDuplicates: false 
+        }
       )
       .select();
     
     if (error) {
       console.error('Supabase upsert error:', error);
-      return res.status(500).json({ error: error.message, details: error.details });
+      return res.status(500).json({ 
+        error: error.message,
+        details: error.details,
+        hint: error.hint,
+        code: error.code
+      });
     }
     
-    console.log('✅ Attendance recorded successfully:', data[0]?.id);
+    console.log('✅ Attendance recorded successfully:', data[0]);
     res.json({ success: true, attendance: data[0] });
+    
   } catch (error) {
     console.error('Error recording attendance:', error);
     res.status(500).json({ error: error.message });
@@ -831,7 +959,6 @@ app.get('/api/learner/dashboard/stats', async (req, res) => {
 // COMPATIBILITY ROUTES (For frontend without /api prefix)
 // ============================================
 
-// Redirect /learner/* to /api/learner/*
 app.get('/learner/attendance', async (req, res) => {
   console.log('🔄 Redirecting: /learner/attendance -> /api/learner/attendance');
   const token = req.headers.authorization;
@@ -986,7 +1113,6 @@ app.get('/learner/dashboard/stats', async (req, res) => {
 // 404 HANDLER
 // ============================================
 
-// Catch-all for undefined routes
 app.use((req, res) => {
   console.log(`❌ Route not found: ${req.method} ${req.path}`);
   res.status(404).json({ 
@@ -1023,7 +1149,6 @@ app.listen(PORT, () => {
   console.log(`🧪 Test endpoint: http://localhost:${PORT}/test`);
   console.log('='.repeat(60));
   
-  // Log all registered routes for debugging
   console.log('\n📋 Registered API routes:');
   const routes = [];
   
@@ -1053,6 +1178,9 @@ app.listen(PORT, () => {
   console.log('   GET /learners/reports');
   console.log('   GET /learner/profile');
   console.log('   GET /learner/dashboard/stats');
+  console.log('\n🔧 Debug endpoints:');
+  console.log('   GET /api/debug/learners');
+  console.log('   GET /api/debug/attendance-test');
   console.log('='.repeat(60));
 });
 
