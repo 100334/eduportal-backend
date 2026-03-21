@@ -135,7 +135,6 @@ app.get('/test', (req, res) => {
 
 app.get('/health', async (req, res) => {
   try {
-    // Test Supabase connection
     const { data, error } = await supabase.from('users').select('count').limit(1);
     
     res.status(200).json({ 
@@ -157,10 +156,10 @@ app.get('/health', async (req, res) => {
 });
 
 // ============================================
-// AUTH ROUTES - IMPROVED VERSION
+// AUTH ROUTES
 // ============================================
 
-// Teacher login - IMPROVED with case-insensitive matching
+// Teacher login
 app.post('/api/auth/teacher/login', async (req, res) => {
   try {
     const { username, password } = req.body;
@@ -172,7 +171,6 @@ app.post('/api/auth/teacher/login', async (req, res) => {
     
     const normalizedUsername = username?.trim().toLowerCase();
     
-    // Query Supabase for teacher with case-insensitive email match
     const { data: teacher, error } = await supabase
       .from('users')
       .select('*')
@@ -198,7 +196,6 @@ app.post('/api/auth/teacher/login', async (req, res) => {
     
     console.log('✅ Teacher found:', teacher.email);
     
-    // Check password (for demo, accept 'password123' or stored password)
     const isValidPassword = password === 'password123' || 
                            (teacher.password_hash && password === teacher.password_hash);
     
@@ -210,7 +207,6 @@ app.post('/api/auth/teacher/login', async (req, res) => {
       });
     }
     
-    // Generate simple token
     const token = Buffer.from(JSON.stringify({ 
       id: teacher.id, 
       email: teacher.email, 
@@ -237,7 +233,7 @@ app.post('/api/auth/teacher/login', async (req, res) => {
   }
 });
 
-// Learner login - IMPROVED with flexible matching
+// Learner login
 app.post('/api/auth/learner/login', async (req, res) => {
   try {
     const { name, regNumber } = req.body;
@@ -246,7 +242,6 @@ app.post('/api/auth/learner/login', async (req, res) => {
     console.log('🔍 LEARNER LOGIN ATTEMPT');
     console.log('Request body:', { name, regNumber });
     
-    // Clean and normalize the input
     const normalizedName = name?.trim().toLowerCase();
     const normalizedReg = regNumber?.trim().toUpperCase();
     
@@ -254,7 +249,6 @@ app.post('/api/auth/learner/login', async (req, res) => {
     console.log('Normalized - Reg Number:', normalizedReg);
     console.log('==================================================');
     
-    // First, let's see what's in the database for debugging
     const { data: allLearners, error: listError } = await supabase
       .from('learners')
       .select('*');
@@ -271,7 +265,6 @@ app.post('/api/auth/learner/login', async (req, res) => {
       }
     }
     
-    // Try to find the learner with flexible matching
     let learner = null;
     
     // Method 1: Try ILIKE for case-insensitive partial matching
@@ -290,7 +283,7 @@ app.post('/api/auth/learner/login', async (req, res) => {
       console.log('✅ Found learner with flexible matching:', learner.name);
     }
     
-    // Method 2: If flexible match failed, try exact match with trim
+    // Method 2: Try exact match with trim
     if (!learner) {
       const { data: exactMatch, error: exactError } = await supabase
         .from('learners')
@@ -326,8 +319,6 @@ app.post('/api/auth/learner/login', async (req, res) => {
     
     if (!learner) {
       console.log('❌ No matching learner found');
-      
-      // Debug: Show what we tried to match
       console.log('💡 Debug info:');
       console.log(`   Tried to match: Name="${normalizedName}", Reg="${normalizedReg}"`);
       if (allLearners && allLearners.length > 0) {
@@ -349,7 +340,6 @@ app.post('/api/auth/learner/login', async (req, res) => {
       grade: learner.grade
     });
     
-    // Generate simple token
     const token = Buffer.from(JSON.stringify({ 
       id: learner.id, 
       name: learner.name, 
@@ -428,7 +418,6 @@ app.post('/api/teacher/learners', async (req, res) => {
   try {
     const { name, grade, status } = req.body;
     
-    // Generate registration number
     const regNumber = `EDU-${new Date().getFullYear()}-${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`;
     
     const { data, error } = await supabase
@@ -445,7 +434,26 @@ app.post('/api/teacher/learners', async (req, res) => {
   }
 });
 
-// Get reports
+// Delete learner
+app.delete('/api/teacher/learners/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const { error } = await supabase
+      .from('learners')
+      .delete()
+      .eq('id', id);
+    
+    if (error) throw error;
+    
+    res.json({ success: true, message: 'Learner deleted successfully' });
+  } catch (error) {
+    console.error('Error deleting learner:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get all reports
 app.get('/api/teacher/reports', async (req, res) => {
   try {
     const { data, error } = await supabase
@@ -488,7 +496,26 @@ app.post('/api/teacher/reports', async (req, res) => {
   }
 });
 
-// Get attendance
+// Delete report
+app.delete('/api/teacher/reports/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const { error } = await supabase
+      .from('reports')
+      .delete()
+      .eq('id', id);
+    
+    if (error) throw error;
+    
+    res.json({ success: true, message: 'Report deleted successfully' });
+  } catch (error) {
+    console.error('Error deleting report:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get all attendance
 app.get('/api/teacher/attendance', async (req, res) => {
   try {
     const { data, error } = await supabase
@@ -510,7 +537,6 @@ app.post('/api/teacher/attendance', async (req, res) => {
   try {
     const { learnerId, date, status } = req.body;
     
-    // Upsert (insert or update)
     const { data, error } = await supabase
       .from('attendance')
       .upsert([{ learner_id: learnerId, date, status }], { onConflict: 'learner_id,date' })
@@ -521,6 +547,54 @@ app.post('/api/teacher/attendance', async (req, res) => {
     res.json({ success: true, attendance: data[0] });
   } catch (error) {
     console.error('Error recording attendance:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Teacher dashboard stats
+app.get('/api/teacher/dashboard/stats', async (req, res) => {
+  try {
+    const { data: learners, error: learnersError } = await supabase
+      .from('learners')
+      .select('*');
+    
+    if (learnersError) throw learnersError;
+    
+    const { data: reports, error: reportsError } = await supabase
+      .from('reports')
+      .select('*');
+    
+    if (reportsError) throw reportsError;
+    
+    const { data: attendance, error: attendanceError } = await supabase
+      .from('attendance')
+      .select('*');
+    
+    if (attendanceError) throw attendanceError;
+    
+    let totalAtt = 0;
+    let presentCount = 0;
+    
+    learners.forEach(learner => {
+      const records = attendance.filter(a => a.learner_id === learner.id);
+      if (records.length) {
+        const present = records.filter(a => a.status === 'present' || a.status === 'late').length;
+        totalAtt += records.length;
+        presentCount += present;
+      }
+    });
+    
+    const avgAttendance = totalAtt ? Math.round(presentCount / totalAtt * 100) : 0;
+    
+    res.json({
+      totalLearners: learners.length,
+      totalReports: reports.length,
+      averageAttendance: avgAttendance,
+      activeLearners: learners.filter(l => l.status === 'Active').length,
+      pendingReports: reports.filter(r => !r.is_finalized).length
+    });
+  } catch (error) {
+    console.error('Dashboard stats error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -607,6 +681,61 @@ app.get('/api/learner/attendance', async (req, res) => {
   }
 });
 
+// Learner dashboard stats
+app.get('/api/learner/dashboard/stats', async (req, res) => {
+  const token = req.headers.authorization?.split(' '')[1];
+  
+  if (!token) {
+    return res.status(401).json({ error: 'No token provided' });
+  }
+  
+  try {
+    const decoded = JSON.parse(Buffer.from(token, 'base64').toString());
+    
+    const { data: reports, error: reportsError } = await supabase
+      .from('reports')
+      .select('*')
+      .eq('learner_id', decoded.id);
+    
+    if (reportsError) throw reportsError;
+    
+    const { data: attendance, error: attendanceError } = await supabase
+      .from('attendance')
+      .select('*')
+      .eq('learner_id', decoded.id);
+    
+    if (attendanceError) throw attendanceError;
+    
+    let attendanceRate = 0;
+    if (attendance.length > 0) {
+      const presentCount = attendance.filter(a => a.status === 'present' || a.status === 'late').length;
+      attendanceRate = Math.round(presentCount / attendance.length * 100);
+    }
+    
+    let averageScore = null;
+    if (reports.length > 0) {
+      const latest = reports[reports.length - 1];
+      if (latest.subjects && latest.subjects.length > 0) {
+        const sum = latest.subjects.reduce((acc, s) => acc + s.score, 0);
+        averageScore = Math.round(sum / latest.subjects.length);
+      }
+    }
+    
+    res.json({
+      reportsCount: reports.length,
+      attendanceRate: attendanceRate,
+      averageScore: averageScore,
+      totalDays: attendance.length,
+      presentCount: attendance.filter(a => a.status === 'present').length,
+      lateCount: attendance.filter(a => a.status === 'late').length,
+      absentCount: attendance.filter(a => a.status === 'absent').length
+    });
+  } catch (error) {
+    console.error('Learner dashboard stats error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ============================================
 // 404 Handler
 // ============================================
@@ -647,7 +776,25 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`   - Health:    http://localhost:${PORT}/health`);
   console.log(`   - API Info:  http://localhost:${PORT}/api`);
   console.log(`   - Test:      http://localhost:${PORT}/test`);
-  console.log(`   - Auth Test: http://localhost:${PORT}/api/auth/teacher/login`);
+  console.log(`\n📚 Teacher Endpoints:`);
+  console.log(`   GET    /api/teacher/learners`);
+  console.log(`   POST   /api/teacher/learners`);
+  console.log(`   DELETE /api/teacher/learners/:id`);
+  console.log(`   GET    /api/teacher/reports`);
+  console.log(`   POST   /api/teacher/reports`);
+  console.log(`   DELETE /api/teacher/reports/:id`);
+  console.log(`   GET    /api/teacher/attendance`);
+  console.log(`   POST   /api/teacher/attendance`);
+  console.log(`   GET    /api/teacher/dashboard/stats`);
+  console.log(`\n📚 Learner Endpoints:`);
+  console.log(`   GET    /api/learner/profile`);
+  console.log(`   GET    /api/learner/reports`);
+  console.log(`   GET    /api/learner/attendance`);
+  console.log(`   GET    /api/learner/dashboard/stats`);
+  console.log(`\n🔐 Auth Endpoints:`);
+  console.log(`   POST   /api/auth/teacher/login`);
+  console.log(`   POST   /api/auth/learner/login`);
+  console.log(`   GET    /api/auth/verify`);
   console.log('='.repeat(60));
 });
 
