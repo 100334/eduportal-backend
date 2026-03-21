@@ -207,7 +207,6 @@ app.get('/api/health', async (req, res) => {
 // Debug endpoint to test attendance with integer IDs
 app.get('/api/debug/attendance-test', async (req, res) => {
   try {
-    // Get first learner
     const { data: learner, error: learnerError } = await supabase
       .from('learners')
       .select('id, name')
@@ -224,7 +223,6 @@ app.get('/api/debug/attendance-test', async (req, res) => {
     
     console.log('Found learner for test:', learner);
     
-    // Test data
     const testData = {
       learner_id: learner.id,
       date: new Date().toISOString().split('T')[0],
@@ -573,12 +571,24 @@ app.delete('/api/teacher/learners/:id', async (req, res) => {
   }
 });
 
+// ============================================
+// REPORTS ROUTES - UPDATED FOR FULL SCHEMA
+// ============================================
+
 // Get all reports
 app.get('/api/teacher/reports', async (req, res) => {
   try {
     const { data, error } = await supabase
       .from('reports')
-      .select('*, learners(name, reg_number)')
+      .select(`
+        *,
+        learners:learner_id (
+          id,
+          name,
+          reg_number,
+          grade
+        )
+      `)
       .order('generated_date', { ascending: false });
     
     if (error) {
@@ -593,12 +603,33 @@ app.get('/api/teacher/reports', async (req, res) => {
   }
 });
 
-// Create report
+// Create report - UPDATED for full schema
 app.post('/api/teacher/reports', async (req, res) => {
   try {
-    const { learnerId, term, grade, subjects, comment } = req.body;
+    const { 
+      learnerId, 
+      term, 
+      academic_year,
+      grade, 
+      subjects, 
+      comment,
+      teacher_comment,
+      principal_comment,
+      attendance_days,
+      days_present,
+      total_score,
+      average_score
+    } = req.body;
     
-    console.log('📝 Creating report with data:', { learnerId, term, grade, subjectsCount: subjects?.length });
+    console.log('📝 Creating report with data:', { 
+      learnerId, 
+      term, 
+      academic_year,
+      grade, 
+      subjectsCount: subjects?.length,
+      total_score,
+      average_score
+    });
     
     // Validate required fields
     if (!learnerId) {
@@ -617,7 +648,7 @@ app.post('/api/teacher/reports', async (req, res) => {
     // Check if learner exists
     const { data: learner, error: learnerError } = await supabase
       .from('learners')
-      .select('id')
+      .select('id, name')
       .eq('id', learnerId)
       .single();
     
@@ -626,13 +657,27 @@ app.post('/api/teacher/reports', async (req, res) => {
       return res.status(404).json({ error: 'Learner not found' });
     }
     
+    // Calculate scores if not provided
+    const calculatedTotalScore = total_score !== undefined ? total_score : subjects.reduce((sum, s) => sum + (s.score || 0), 0);
+    const calculatedAverageScore = average_score !== undefined ? average_score : (subjects.length ? Math.round(calculatedTotalScore / subjects.length) : 0);
+    
     const reportData = {
       learner_id: learnerId,
       term: term,
+      academic_year: academic_year || new Date().getFullYear().toString(),
       grade: grade,
       subjects: subjects,
-      comment: comment || '',
-      generated_date: new Date().toISOString()
+      total_score: calculatedTotalScore,
+      average_score: calculatedAverageScore,
+      comment: comment || teacher_comment || '',
+      teacher_comment: teacher_comment || comment || '',
+      principal_comment: principal_comment || '',
+      attendance_days: attendance_days || 0,
+      days_present: days_present || 0,
+      generated_date: new Date().toISOString(),
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      is_finalized: false
     };
     
     console.log('📤 Inserting report:', reportData);
@@ -651,6 +696,37 @@ app.post('/api/teacher/reports', async (req, res) => {
     res.json({ success: true, report: data[0] });
   } catch (error) {
     console.error('Error creating report:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get single report by ID
+app.get('/api/teacher/reports/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const { data, error } = await supabase
+      .from('reports')
+      .select(`
+        *,
+        learners:learner_id (
+          id,
+          name,
+          reg_number,
+          grade
+        )
+      `)
+      .eq('id', id)
+      .single();
+    
+    if (error) {
+      console.error('Error fetching report:', error);
+      return res.status(404).json({ error: 'Report not found' });
+    }
+    
+    res.json(data);
+  } catch (error) {
+    console.error('Error fetching report:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -674,12 +750,45 @@ app.delete('/api/teacher/reports/:id', async (req, res) => {
   }
 });
 
+// Update report (finalize, add comments, etc.)
+app.put('/api/teacher/reports/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { is_finalized, teacher_comment, principal_comment } = req.body;
+    
+    const updateData = {
+      updated_at: new Date().toISOString()
+    };
+    
+    if (is_finalized !== undefined) updateData.is_finalized = is_finalized;
+    if (teacher_comment !== undefined) updateData.teacher_comment = teacher_comment;
+    if (principal_comment !== undefined) updateData.principal_comment = principal_comment;
+    
+    const { data, error } = await supabase
+      .from('reports')
+      .update(updateData)
+      .eq('id', id)
+      .select();
+    
+    if (error) throw error;
+    
+    res.json({ success: true, report: data[0] });
+  } catch (error) {
+    console.error('Error updating report:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============================================
+// ATTENDANCE ROUTES
+// ============================================
+
 // Get all attendance
 app.get('/api/teacher/attendance', async (req, res) => {
   try {
     const { data, error } = await supabase
       .from('attendance')
-      .select('*, learners(name)')
+      .select('*, learners(name, reg_number)')
       .order('date', { ascending: false });
     
     if (error) {
@@ -694,7 +803,7 @@ app.get('/api/teacher/attendance', async (req, res) => {
   }
 });
 
-// Record attendance - UPDATED for integer IDs
+// Record attendance
 app.post('/api/teacher/attendance', async (req, res) => {
   try {
     const { learnerId, date, status } = req.body;
