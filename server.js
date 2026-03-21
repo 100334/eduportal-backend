@@ -605,7 +605,7 @@ app.get('/api/teacher/dashboard/stats', async (req, res) => {
 
 // Get learner profile
 app.get('/api/learner/profile', async (req, res) => {
-  const token = req.headers.authorization?.split(' ')[1];
+  const token = req.headers.authorization ? req.headers.authorization.split(' ')[1] : null;
   
   if (!token) {
     return res.status(401).json({ error: 'No token provided' });
@@ -631,7 +631,7 @@ app.get('/api/learner/profile', async (req, res) => {
 
 // Get learner reports
 app.get('/api/learner/reports', async (req, res) => {
-  const token = req.headers.authorization?.split(' ')[1];
+  const token = req.headers.authorization ? req.headers.authorization.split(' ')[1] : null;
   
   if (!token) {
     return res.status(401).json({ error: 'No token provided' });
@@ -657,7 +657,7 @@ app.get('/api/learner/reports', async (req, res) => {
 
 // Get learner attendance
 app.get('/api/learner/attendance', async (req, res) => {
-  const token = req.headers.authorization?.split(' ')[1];
+  const token = req.headers.authorization ? req.headers.authorization.split(' ')[1] : null;
   
   if (!token) {
     return res.status(401).json({ error: 'No token provided' });
@@ -683,7 +683,7 @@ app.get('/api/learner/attendance', async (req, res) => {
 
 // Learner dashboard stats
 app.get('/api/learner/dashboard/stats', async (req, res) => {
-  const token = req.headers.authorization?.split(' '')[1];
+  const token = req.headers.authorization ? req.headers.authorization.split(' ')[1] : null;
   
   if (!token) {
     return res.status(401).json({ error: 'No token provided' });
@@ -716,7 +716,7 @@ app.get('/api/learner/dashboard/stats', async (req, res) => {
     if (reports.length > 0) {
       const latest = reports[reports.length - 1];
       if (latest.subjects && latest.subjects.length > 0) {
-        const sum = latest.subjects.reduce((acc, s) => acc + s.score, 0);
+        const sum = latest.subjects.reduce((acc, s) => acc + (s.score || 0), 0);
         averageScore = Math.round(sum / latest.subjects.length);
       }
     }
@@ -735,67 +735,3 @@ app.get('/api/learner/dashboard/stats', async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
-
-// ============================================
-// 404 Handler
-// ============================================
-app.use((req, res) => {
-  console.log(`404 - ${req.method} ${req.path} - Not found`);
-  res.status(404).json({ 
-    success: false,
-    message: 'Route not found',
-    path: req.path,
-    method: req.method
-  });
-});
-
-// ============================================
-// Error Handler
-// ============================================
-app.use((err, req, res, next) => {
-  console.error('🔥 Error:', err.message);
-  
-  res.status(err.status || 500).json({ 
-    success: false,
-    message: err.message || 'Internal server error',
-    ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
-  });
-});
-
-// ============================================
-// START SERVER
-// ============================================
-const PORT = process.env.PORT || 5000;
-app.listen(PORT, '0.0.0.0', () => {
-  console.log('\n' + '='.repeat(60));
-  console.log(`🚀 SERVER STARTED SUCCESSFULLY`);
-  console.log('='.repeat(60));
-  console.log(`\n📡 Port: ${PORT}`);
-  console.log(`📡 Supabase: ${process.env.SUPABASE_URL ? '✅ Configured' : '❌ Not configured'}`);
-  console.log(`\n📍 Available endpoints:`);
-  console.log(`   - Health:    http://localhost:${PORT}/health`);
-  console.log(`   - API Info:  http://localhost:${PORT}/api`);
-  console.log(`   - Test:      http://localhost:${PORT}/test`);
-  console.log(`\n📚 Teacher Endpoints:`);
-  console.log(`   GET    /api/teacher/learners`);
-  console.log(`   POST   /api/teacher/learners`);
-  console.log(`   DELETE /api/teacher/learners/:id`);
-  console.log(`   GET    /api/teacher/reports`);
-  console.log(`   POST   /api/teacher/reports`);
-  console.log(`   DELETE /api/teacher/reports/:id`);
-  console.log(`   GET    /api/teacher/attendance`);
-  console.log(`   POST   /api/teacher/attendance`);
-  console.log(`   GET    /api/teacher/dashboard/stats`);
-  console.log(`\n📚 Learner Endpoints:`);
-  console.log(`   GET    /api/learner/profile`);
-  console.log(`   GET    /api/learner/reports`);
-  console.log(`   GET    /api/learner/attendance`);
-  console.log(`   GET    /api/learner/dashboard/stats`);
-  console.log(`\n🔐 Auth Endpoints:`);
-  console.log(`   POST   /api/auth/teacher/login`);
-  console.log(`   POST   /api/auth/learner/login`);
-  console.log(`   GET    /api/auth/verify`);
-  console.log('='.repeat(60));
-});
-
-module.exports = app;
