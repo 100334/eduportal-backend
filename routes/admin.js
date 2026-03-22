@@ -49,11 +49,11 @@ router.use(isAdmin);
 
 // ============ TEACHER MANAGEMENT ============
 
-// Get all teachers
+// Get all teachers - FIXED: use 'name' instead of 'full_name'
 router.get('/teachers', async (req, res) => {
     try {
         const result = await db.query(`
-            SELECT u.id, u.email, u.full_name, u.is_active, u.created_at,
+            SELECT u.id, u.email, u.name, u.is_active, u.created_at,
                    t.employee_id, t.department, t.qualification, t.specialization,
                    t.joining_date, t.phone_number, t.address
             FROM users u
@@ -68,11 +68,11 @@ router.get('/teachers', async (req, res) => {
     }
 });
 
-// Create teacher with credentials
+// Create teacher with credentials - FIXED: use 'name' instead of 'full_name'
 router.post('/teachers', async (req, res) => {
     const {
         email,
-        full_name,
+        name,
         employee_id,
         department,
         qualification,
@@ -100,12 +100,12 @@ router.post('/teachers', async (req, res) => {
         const tempPassword = generateRandomPassword();
         const passwordHash = await bcrypt.hash(tempPassword, 10);
 
-        // Insert into users table
+        // Insert into users table - using 'name' not 'full_name'
         const userResult = await client.query(`
-            INSERT INTO users (email, password_hash, full_name, role, is_active)
+            INSERT INTO users (email, password_hash, name, role, is_active)
             VALUES ($1, $2, $3, 'teacher', true)
-            RETURNING id, email, full_name
-        `, [email, passwordHash, full_name]);
+            RETURNING id, email, name
+        `, [email, passwordHash, name]);
 
         const userId = userResult.rows[0].id;
 
@@ -125,7 +125,7 @@ router.post('/teachers', async (req, res) => {
             teacher: {
                 id: userId,
                 email,
-                full_name,
+                name,
                 employee_id
             },
             temporary_password: tempPassword
@@ -141,11 +141,11 @@ router.post('/teachers', async (req, res) => {
 
 // ============ LEARNER MANAGEMENT ============
 
-// Get all learners
+// Get all learners - FIXED: use 'name' instead of 'full_name'
 router.get('/learners', async (req, res) => {
     try {
         const result = await db.query(`
-            SELECT u.id, u.email, u.full_name, u.is_active, u.created_at,
+            SELECT u.id, u.email, u.name, u.is_active, u.created_at,
                    l.student_id, l.reg_number, l.enrollment_date, l.form,
                    l.guardian_name, l.guardian_phone, l.address, l.date_of_birth
             FROM users u
@@ -160,11 +160,11 @@ router.get('/learners', async (req, res) => {
     }
 });
 
-// Create learner with credentials
+// Create learner with credentials - FIXED: use 'name' instead of 'full_name'
 router.post('/learners', async (req, res) => {
     const {
         email,
-        full_name,
+        name,
         student_id,
         enrollment_date,
         form,
@@ -195,12 +195,12 @@ router.post('/learners', async (req, res) => {
         const tempPassword = generateRandomPassword();
         const passwordHash = await bcrypt.hash(tempPassword, 10);
 
-        // Insert into users table
+        // Insert into users table - using 'name' not 'full_name'
         const userResult = await client.query(`
-            INSERT INTO users (email, password_hash, full_name, role, is_active)
+            INSERT INTO users (email, password_hash, name, role, is_active)
             VALUES ($1, $2, $3, 'learner', true)
-            RETURNING id, email, full_name
-        `, [email, passwordHash, full_name]);
+            RETURNING id, email, name
+        `, [email, passwordHash, name]);
 
         const userId = userResult.rows[0].id;
 
@@ -220,7 +220,7 @@ router.post('/learners', async (req, res) => {
             learner: {
                 id: userId,
                 email,
-                full_name,
+                name,
                 reg_number
             },
             temporary_password: tempPassword
@@ -236,7 +236,7 @@ router.post('/learners', async (req, res) => {
 
 // ============ USER MANAGEMENT (Common) ============
 
-// Reset user password
+// Reset user password - FIXED: use 'name' instead of 'full_name'
 router.post('/users/:userId/reset-password', async (req, res) => {
     const { userId } = req.params;
     
@@ -247,7 +247,7 @@ router.post('/users/:userId/reset-password', async (req, res) => {
         const result = await db.query(`
             UPDATE users SET password_hash = $1, updated_at = CURRENT_TIMESTAMP
             WHERE id = $2
-            RETURNING email, full_name, role
+            RETURNING email, name, role
         `, [passwordHash, userId]);
         
         if (result.rows.length === 0) {
@@ -266,7 +266,7 @@ router.post('/users/:userId/reset-password', async (req, res) => {
     }
 });
 
-// Update user status (activate/deactivate)
+// Update user status - FIXED: use 'name' instead of 'full_name'
 router.patch('/users/:userId/status', async (req, res) => {
     const { userId } = req.params;
     const { is_active } = req.body;
@@ -275,7 +275,7 @@ router.patch('/users/:userId/status', async (req, res) => {
         const result = await db.query(`
             UPDATE users SET is_active = $1, updated_at = CURRENT_TIMESTAMP
             WHERE id = $2
-            RETURNING email, full_name, role, is_active
+            RETURNING email, name, role, is_active
         `, [is_active, userId]);
         
         if (result.rows.length === 0) {
