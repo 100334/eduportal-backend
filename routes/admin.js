@@ -1,8 +1,6 @@
 const express = require('express');
 const bcrypt = require('bcrypt');
 const router = express.Router();
-const db = require('../config/database');
-const authMiddleware = require('../middleware/auth');
 
 // Helper: Generate random password
 const generateRandomPassword = () => {
@@ -16,59 +14,85 @@ const generateRandomPassword = () => {
 };
 
 // Helper: Generate registration number
-const generateRegNumber = async () => {
+const generateRegNumber = async (supabase) => {
     const year = new Date().getFullYear();
-    const result = await db.query(
-        "SELECT COUNT(*) FROM learners WHERE reg_number LIKE $1",
-        [`EDU-${year}-%`]
-    );
-    const count = parseInt(result.rows[0].count) + 1;
-    return `EDU-${year}-${String(count).padStart(4, '0')}`;
+    const { data, error } = await supabase
+        .from('learners')
+        .select('reg_number')
+        .ilike('reg_number', `EDU-${year}-%`);
+    
+    const count = data?.length || 0;
+    return `EDU-${year}-${String(count + 1).padStart(4, '0')}`;
 };
 
 // Middleware to check if user is admin
 const isAdmin = async (req, res, next) => {
     try {
-        const result = await db.query(
-            'SELECT role FROM users WHERE id = $1',
-            [req.user.userId]
-        );
+        const supabase = req.app.locals.supabase;
+        const token = req.headers.authorization?.split(' ')[1];
         
-        if (result.rows[0]?.role !== 'admin') {
+        if (!token) {
+            return res.status(401).json({ error: 'No token provided' });
+        }
+        
+        const decoded = JSON.parse(Buffer.from(token, 'base64').toString());
+        
+        const { data: user, error } = await supabase
+            .from('users')
+            .select('role')
+            .eq('id', decoded.id)
+            .single();
+        
+        if (error || !user || user.role !== 'admin') {
             return res.status(403).json({ error: 'Access denied. Admin only.' });
         }
+        
+        req.user = decoded;
         next();
     } catch (error) {
+        console.error('Admin middleware error:', error);
         res.status(500).json({ error: 'Authorization error' });
     }
 };
 
 // Apply auth and admin middleware
-router.use(authMiddleware);
 router.use(isAdmin);
 
 // ============ TEACHER MANAGEMENT ============
 
-// Get all teachers - FIXED: use 'name' instead of 'full_name'
+// Get all teachers
 router.get('/teachers', async (req, res) => {
     try {
-        const result = await db.query(`
-            SELECT u.id, u.email, u.name, u.is_active, u.created_at,
-                   t.employee_id, t.department, t.qualification, t.specialization,
-                   t.joining_date, t.phone_number, t.address
-            FROM users u
-            LEFT JOIN teachers t ON u.id = t.user_id
-            WHERE u.role = 'teacher'
-            ORDER BY u.created_at DESC
-        `);
-        res.json(result.rows);
+        const supabase = req.app.locals.supabase;
+        
+        const { data, error } = await supabase
+            .from('users')
+            .select(`
+                id, email, name, is_active, created_at,
+                teachers:user_id (employee_id, department, qualification, specialization, joining_date, phone_number, address)
+            `)
+            .eq('role', 'teacher')
+            .order('created_at', { ascending: false });
+        
+        if (error) throw error;
+        
+        const teachers = data.map(user => ({
+            id: user.id,
+            email: user.email,
+            full_name: user.name,
+            is_active: user.is_active,
+            created_at: user.created_at,
+            ...(user.teachers || {})
+        }));
+        
+        res.json(teachers);
     } catch (error) {
         console.error('Error fetching teachers:', error);
         res.status(500).json({ error: 'Failed to fetch teachers' });
     }
 });
 
-// Create teacher with credentials - FIXED: use 'name' instead of 'full_name'
+// Create teacher with credentials
 router.post('/teachers', async (req, res) => {
     const {
         email,
@@ -82,17 +106,17 @@ router.post('/teachers', async (req, res) => {
         address
     } = req.body;
 
-    const client = await db.connect();
+    const supabase = req.app.locals.supabase;
     
     try {
-        await client.query('BEGIN');
-
         // Check if email exists
-        const emailCheck = await client.query(
-            'SELECT id FROM users WHERE email = $1',
-            [email]
-        );
-        if (emailCheck.rows.length > 0) {
+        const { data: existing } = await supabase
+            .from('users')
+            .select('id')
+            .eq('email', email)
+            .single();
+        
+        if (existing) {
             return res.status(400).json({ error: 'Email already exists' });
         }
 
@@ -100,30 +124,42 @@ router.post('/teachers', async (req, res) => {
         const tempPassword = generateRandomPassword();
         const passwordHash = await bcrypt.hash(tempPassword, 10);
 
-        // Insert into users table - using 'name' not 'full_name'
-        const userResult = await client.query(`
-            INSERT INTO users (email, password_hash, name, role, is_active)
-            VALUES ($1, $2, $3, 'teacher', true)
-            RETURNING id, email, name
-        `, [email, passwordHash, name]);
-
-        const userId = userResult.rows[0].id;
+        // Insert into users table
+        const { data: user, error: userError } = await supabase
+            .from('users')
+            .insert([{
+                email,
+                password_hash: passwordHash,
+                name,
+                role: 'teacher',
+                is_active: true
+            }])
+            .select()
+            .single();
+        
+        if (userError) throw userError;
 
         // Insert into teachers table
-        await client.query(`
-            INSERT INTO teachers (user_id, employee_id, department, qualification, 
-                                 specialization, joining_date, phone_number, address)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-        `, [userId, employee_id, department, qualification, 
-            specialization, joining_date, phone_number, address]);
-
-        await client.query('COMMIT');
+        const { error: teacherError } = await supabase
+            .from('teachers')
+            .insert([{
+                user_id: user.id,
+                employee_id,
+                department,
+                qualification,
+                specialization,
+                joining_date,
+                phone_number,
+                address
+            }]);
+        
+        if (teacherError) throw teacherError;
 
         res.status(201).json({
             success: true,
             message: 'Teacher created successfully',
             teacher: {
-                id: userId,
+                id: user.id,
                 email,
                 name,
                 employee_id
@@ -131,36 +167,47 @@ router.post('/teachers', async (req, res) => {
             temporary_password: tempPassword
         });
     } catch (error) {
-        await client.query('ROLLBACK');
         console.error('Error creating teacher:', error);
         res.status(500).json({ error: 'Failed to create teacher' });
-    } finally {
-        client.release();
     }
 });
 
 // ============ LEARNER MANAGEMENT ============
 
-// Get all learners - FIXED: use 'name' instead of 'full_name'
+// Get all learners
 router.get('/learners', async (req, res) => {
     try {
-        const result = await db.query(`
-            SELECT u.id, u.email, u.name, u.is_active, u.created_at,
-                   l.student_id, l.reg_number, l.enrollment_date, l.form,
-                   l.guardian_name, l.guardian_phone, l.address, l.date_of_birth
-            FROM users u
-            LEFT JOIN learners l ON u.id = l.user_id
-            WHERE u.role = 'learner'
-            ORDER BY u.created_at DESC
-        `);
-        res.json(result.rows);
+        const supabase = req.app.locals.supabase;
+        
+        const { data, error } = await supabase
+            .from('learners')
+            .select(`
+                id, name, reg_number, form, status, created_at,
+                users:user_id (email, is_active)
+            `)
+            .order('created_at', { ascending: false });
+        
+        if (error) throw error;
+        
+        const learners = data.map(learner => ({
+            id: learner.id,
+            name: learner.name,
+            email: learner.users?.email,
+            reg_number: learner.reg_number,
+            form: learner.form,
+            status: learner.status,
+            is_active: learner.users?.is_active,
+            created_at: learner.created_at
+        }));
+        
+        res.json(learners);
     } catch (error) {
         console.error('Error fetching learners:', error);
         res.status(500).json({ error: 'Failed to fetch learners' });
     }
 });
 
-// Create learner with credentials - FIXED: use 'name' instead of 'full_name'
+// Create learner with credentials
 router.post('/learners', async (req, res) => {
     const {
         email,
@@ -174,51 +221,66 @@ router.post('/learners', async (req, res) => {
         date_of_birth
     } = req.body;
 
-    const client = await db.connect();
+    const supabase = req.app.locals.supabase;
     
     try {
-        await client.query('BEGIN');
-
         // Check if email exists
-        const emailCheck = await client.query(
-            'SELECT id FROM users WHERE email = $1',
-            [email]
-        );
-        if (emailCheck.rows.length > 0) {
+        const { data: existing } = await supabase
+            .from('users')
+            .select('id')
+            .eq('email', email)
+            .single();
+        
+        if (existing) {
             return res.status(400).json({ error: 'Email already exists' });
         }
 
         // Generate registration number
-        const reg_number = await generateRegNumber();
+        const reg_number = await generateRegNumber(supabase);
         
         // Generate random password
         const tempPassword = generateRandomPassword();
         const passwordHash = await bcrypt.hash(tempPassword, 10);
 
-        // Insert into users table - using 'name' not 'full_name'
-        const userResult = await client.query(`
-            INSERT INTO users (email, password_hash, name, role, is_active)
-            VALUES ($1, $2, $3, 'learner', true)
-            RETURNING id, email, name
-        `, [email, passwordHash, name]);
-
-        const userId = userResult.rows[0].id;
+        // Insert into users table
+        const { data: user, error: userError } = await supabase
+            .from('users')
+            .insert([{
+                email,
+                password_hash: passwordHash,
+                name,
+                role: 'learner',
+                is_active: true
+            }])
+            .select()
+            .single();
+        
+        if (userError) throw userError;
 
         // Insert into learners table
-        await client.query(`
-            INSERT INTO learners (user_id, student_id, reg_number, enrollment_date, form,
-                                 guardian_name, guardian_phone, address, date_of_birth)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-        `, [userId, student_id, reg_number, enrollment_date, form,
-            guardian_name, guardian_phone, address, date_of_birth]);
-
-        await client.query('COMMIT');
+        const { error: learnerError } = await supabase
+            .from('learners')
+            .insert([{
+                user_id: user.id,
+                name,
+                student_id,
+                reg_number,
+                enrollment_date,
+                form,
+                guardian_name,
+                guardian_phone,
+                address,
+                date_of_birth,
+                status: 'Active'
+            }]);
+        
+        if (learnerError) throw learnerError;
 
         res.status(201).json({
             success: true,
             message: 'Learner created successfully',
             learner: {
-                id: userId,
+                id: user.id,
                 email,
                 name,
                 reg_number
@@ -226,39 +288,36 @@ router.post('/learners', async (req, res) => {
             temporary_password: tempPassword
         });
     } catch (error) {
-        await client.query('ROLLBACK');
         console.error('Error creating learner:', error);
         res.status(500).json({ error: 'Failed to create learner' });
-    } finally {
-        client.release();
     }
 });
 
 // ============ USER MANAGEMENT (Common) ============
 
-// Reset user password - FIXED: use 'name' instead of 'full_name'
+// Reset user password
 router.post('/users/:userId/reset-password', async (req, res) => {
     const { userId } = req.params;
+    const supabase = req.app.locals.supabase;
     
     try {
         const newPassword = generateRandomPassword();
         const passwordHash = await bcrypt.hash(newPassword, 10);
         
-        const result = await db.query(`
-            UPDATE users SET password_hash = $1, updated_at = CURRENT_TIMESTAMP
-            WHERE id = $2
-            RETURNING email, name, role
-        `, [passwordHash, userId]);
+        const { data, error } = await supabase
+            .from('users')
+            .update({ password_hash: passwordHash, updated_at: new Date().toISOString() })
+            .eq('id', userId)
+            .select('email, name, role')
+            .single();
         
-        if (result.rows.length === 0) {
-            return res.status(404).json({ error: 'User not found' });
-        }
+        if (error) throw error;
         
         res.json({
             success: true,
             message: 'Password reset successfully',
             temporary_password: newPassword,
-            user: result.rows[0]
+            user: data
         });
     } catch (error) {
         console.error('Error resetting password:', error);
@@ -266,26 +325,26 @@ router.post('/users/:userId/reset-password', async (req, res) => {
     }
 });
 
-// Update user status - FIXED: use 'name' instead of 'full_name'
+// Update user status
 router.patch('/users/:userId/status', async (req, res) => {
     const { userId } = req.params;
     const { is_active } = req.body;
+    const supabase = req.app.locals.supabase;
     
     try {
-        const result = await db.query(`
-            UPDATE users SET is_active = $1, updated_at = CURRENT_TIMESTAMP
-            WHERE id = $2
-            RETURNING email, name, role, is_active
-        `, [is_active, userId]);
+        const { data, error } = await supabase
+            .from('users')
+            .update({ is_active, updated_at: new Date().toISOString() })
+            .eq('id', userId)
+            .select('email, name, role, is_active')
+            .single();
         
-        if (result.rows.length === 0) {
-            return res.status(404).json({ error: 'User not found' });
-        }
+        if (error) throw error;
         
         res.json({
             success: true,
             message: `User ${is_active ? 'activated' : 'deactivated'} successfully`,
-            user: result.rows[0]
+            user: data
         });
     } catch (error) {
         console.error('Error updating user status:', error);
@@ -296,23 +355,30 @@ router.patch('/users/:userId/status', async (req, res) => {
 // Delete user
 router.delete('/users/:userId', async (req, res) => {
     const { userId } = req.params;
+    const supabase = req.app.locals.supabase;
     
     try {
         // Check if user exists and is not admin
-        const userCheck = await db.query(
-            'SELECT role FROM users WHERE id = $1',
-            [userId]
-        );
+        const { data: user } = await supabase
+            .from('users')
+            .select('role')
+            .eq('id', userId)
+            .single();
         
-        if (userCheck.rows.length === 0) {
+        if (!user) {
             return res.status(404).json({ error: 'User not found' });
         }
         
-        if (userCheck.rows[0].role === 'admin') {
+        if (user.role === 'admin') {
             return res.status(403).json({ error: 'Cannot delete admin user' });
         }
         
-        await db.query('DELETE FROM users WHERE id = $1', [userId]);
+        const { error } = await supabase
+            .from('users')
+            .delete()
+            .eq('id', userId);
+        
+        if (error) throw error;
         
         res.json({
             success: true,
@@ -327,16 +393,18 @@ router.delete('/users/:userId', async (req, res) => {
 // Get dashboard stats
 router.get('/stats', async (req, res) => {
     try {
+        const supabase = req.app.locals.supabase;
+        
         const [teachersCount, learnersCount, activeUsersCount] = await Promise.all([
-            db.query("SELECT COUNT(*) FROM users WHERE role = 'teacher'"),
-            db.query("SELECT COUNT(*) FROM users WHERE role = 'learner'"),
-            db.query("SELECT COUNT(*) FROM users WHERE is_active = true")
+            supabase.from('users').select('id', { count: 'exact', head: true }).eq('role', 'teacher'),
+            supabase.from('users').select('id', { count: 'exact', head: true }).eq('role', 'learner'),
+            supabase.from('users').select('id', { count: 'exact', head: true }).eq('is_active', true)
         ]);
         
         res.json({
-            totalTeachers: parseInt(teachersCount.rows[0].count),
-            totalLearners: parseInt(learnersCount.rows[0].count),
-            activeUsers: parseInt(activeUsersCount.rows[0].count)
+            totalTeachers: teachersCount.count || 0,
+            totalLearners: learnersCount.count || 0,
+            activeUsers: activeUsersCount.count || 0
         });
     } catch (error) {
         console.error('Error fetching stats:', error);
