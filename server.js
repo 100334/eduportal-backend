@@ -471,42 +471,53 @@ app.post('/api/auth/learner/login', async (req, res) => {
 // ADMIN LOGIN ENDPOINT
 // ============================================
 
+// ============================================
+// ADMIN LOGIN ENDPOINT - WORKING WITH REAL DATABASE
+// ============================================
+
 app.post('/api/auth/admin/login', async (req, res) => {
   try {
     const { email, password } = req.body;
     
     console.log('🔍 Admin login attempt for:', email);
     
-    // Query Supabase for admin user
-    const { data: admin, error } = await supabase
+    // Query users table - using 'name' not 'full_name'
+    const { data: user, error } = await supabase
       .from('users')
       .select('id, email, name, password_hash, role, is_active')
       .eq('email', email?.trim().toLowerCase())
-      .eq('role', 'admin')
       .maybeSingle();
     
     if (error) {
-      console.error('❌ Supabase query error:', error);
+      console.error('❌ Database error:', error);
       return res.status(500).json({ 
         success: false, 
         message: 'Database error' 
       });
     }
     
-    // Check if admin exists
-    if (!admin) {
-      console.log('❌ Admin not found:', email);
+    if (!user) {
+      console.log('❌ User not found:', email);
       return res.status(401).json({ 
         success: false, 
         message: 'Invalid credentials' 
       });
     }
     
-    console.log('✅ Admin found:', admin.email);
+    console.log('✅ User found:', user.email, 'Role:', user.role);
     
-    // Check if admin account is active
-    if (admin.is_active === false) {
-      console.log('❌ Admin account is deactivated');
+    // Check if user has admin role
+    if (user.role !== 'admin') {
+      console.log('❌ User is not admin. Role:', user.role);
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Access denied. Admin privileges required.' 
+      });
+    }
+    
+    // Check if account is active
+    if (user.is_active === false) {
+      console.log('❌ Account is deactivated');
       return res.status(403).json({ 
         success: false, 
         message: 'Account is deactivated. Please contact support.' 
@@ -516,13 +527,23 @@ app.post('/api/auth/admin/login', async (req, res) => {
     // Validate password
     let isValidPassword = false;
     
-    // Check password (plain text for development)
-    if (password === 'admin123' || password === admin.password_hash) {
+    // Check plain text password (for development)
+    if (password === 'admin123' || password === user.password_hash) {
       isValidPassword = true;
     }
     
+    // If you have bcrypt installed, use it
+    if (!isValidPassword && user.password_hash?.startsWith('$2b$')) {
+      try {
+        const bcrypt = require('bcrypt');
+        isValidPassword = await bcrypt.compare(password, user.password_hash);
+      } catch (err) {
+        console.log('bcrypt not available, using plain text');
+      }
+    }
+    
     if (!isValidPassword) {
-      console.log('❌ Invalid password for admin:', email);
+      console.log('❌ Invalid password');
       return res.status(401).json({ 
         success: false, 
         message: 'Invalid credentials' 
@@ -531,21 +552,21 @@ app.post('/api/auth/admin/login', async (req, res) => {
     
     // Generate token
     const token = Buffer.from(JSON.stringify({ 
-      id: admin.id, 
-      email: admin.email, 
-      role: admin.role 
+      id: user.id, 
+      email: user.email, 
+      role: user.role 
     })).toString('base64');
     
-    console.log('✅ Admin login successful:', admin.email);
+    console.log('✅ Admin login successful:', user.email);
     
     res.json({
       success: true,
       token,
       user: {
-        id: admin.id,
-        name: admin.name || admin.email.split('@')[0],
-        email: admin.email,
-        role: admin.role
+        id: user.id,
+        name: user.name || user.email.split('@')[0],
+        email: user.email,
+        role: user.role
       }
     });
   } catch (error) {
