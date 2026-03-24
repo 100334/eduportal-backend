@@ -670,7 +670,7 @@ app.post('/api/admin/teachers', authenticateToken, authenticateAdmin, async (req
   }
 });
 
-// Get all classes - Updated to handle UUIDs
+// Get all classes
 app.get('/api/admin/classes', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
     const { data: classes, error } = await supabase
@@ -884,138 +884,37 @@ app.delete('/api/admin/classes/:classId', authenticateToken, authenticateAdmin, 
 });
 
 // Get all learners (admin view)
-// In your server.js POST /api/admin/learners endpoint
-app.post('/api/admin/learners', authenticateToken, authenticateAdmin, async (req, res) => {
+app.get('/api/admin/learners', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
-    const { name, reg_number, class_id, form, enrollment_date } = req.body;
-    
-    console.log('📝 Admin registering learner:', { name, reg_number, class_id, form, enrollment_date });
-    console.log('Class ID type:', typeof class_id, 'Value:', class_id);
-    
-    // Validate required fields
-    if (!name || !reg_number || !class_id) {
-      return res.status(400).json({
-        success: false,
-        message: 'Name, registration number, and class are required'
-      });
-    }
-    
-    // Check if registration number already exists
-    const { data: existing, error: checkError } = await supabase
+    const { data: learners, error } = await supabase
       .from('learners')
-      .select('id')
-      .eq('reg_number', reg_number)
-      .maybeSingle();
+      .select('*')
+      .order('name', { ascending: true });
     
-    if (existing) {
-      return res.status(409).json({
-        success: false,
-        message: 'Registration number already exists'
-      });
-    }
-    
-    // IMPORTANT: For UUID, class_id should already be a UUID string
-    // If it's a number, we need to convert it to UUID format
-    let classIdToQuery = class_id;
-    
-    // If class_id is a number or string number, we need to find the actual UUID
-    if (!class_id.includes('-')) {
-      // It's likely an integer ID, find the corresponding UUID
-      const { data: classData, error: classError } = await supabase
-        .from('classes')
-        .select('id')
-        .eq('id::text', class_id.toString())
-        .maybeSingle();
-      
-      if (classError || !classData) {
-        return res.status(404).json({
-          success: false,
-          message: 'Class not found'
-        });
-      }
-      
-      classIdToQuery = classData.id;
-    }
-    
-    // Check if class exists
-    const { data: classExists, error: classError } = await supabase
-      .from('classes')
-      .select('id, name')
-      .eq('id', classIdToQuery)
-      .maybeSingle();
-    
-    if (classError || !classExists) {
-      console.error('Class check error:', classError);
-      return res.status(404).json({
-        success: false,
-        message: 'Class not found'
-      });
-    }
-    
-    console.log('Found class with UUID:', classExists.id);
-    
-    // Insert new learner with UUID class_id
-    const learnerData = {
-      name: name,
-      reg_number: reg_number,
-      class_id: classExists.id, // Use the UUID
-      form: form || getFormName(classExists.name),
-      status: 'Active',
-      enrollment_date: enrollment_date || new Date().toISOString().split('T')[0],
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString()
-    };
-    
-    console.log('Inserting learner with data:', learnerData);
-    
-    const { data: newLearner, error } = await supabase
-      .from('learners')
-      .insert(learnerData)
-      .select()
-      .single();
-    
-    if (error) {
-      console.error('Supabase insert error:', error);
-      return res.status(500).json({
-        success: false,
-        message: 'Database error: ' + error.message,
-        error: error.message
-      });
-    }
-    
-    await logAdminAction(
-      req.user.id,
-      'REGISTER_LEARNER',
-      `Registered learner: ${name} (${reg_number}) in class ${classExists.name}`,
-      req.ip
-    );
+    if (error) throw error;
     
     res.json({
       success: true,
-      message: 'Learner registered successfully',
-      learner: newLearner
+      learners: learners || []
     });
-    
   } catch (err) {
-    console.error('Error registering learner:', err);
+    console.error('Error fetching learners:', err);
     res.status(500).json({
       success: false,
-      message: 'Database error: ' + err.message,
+      message: 'Database error',
       error: err.message
     });
   }
 });
 
-// Register a new learner (Admin) - UPDATED for UUID handling
+// ============================================
+// REGISTER LEARNER - SINGLE CLEAN ENDPOINT
+// ============================================
+
+// Register a new learner (Admin) - FIXED for UUID class_id
 app.post('/api/admin/learners', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
-    const { 
-      name, 
-      reg_number, 
-      class_id, 
-      form, 
-      enrollment_date 
-    } = req.body;
+    const { name, reg_number, class_id, form, enrollment_date } = req.body;
     
     console.log('📝 Admin registering learner:', { name, reg_number, class_id, form, enrollment_date });
     console.log('Class ID type:', typeof class_id, 'Value:', class_id);
@@ -1052,7 +951,7 @@ app.post('/api/admin/learners', authenticateToken, authenticateAdmin, async (req
         .eq('id', class_id)
         .maybeSingle();
     } else {
-      // It might be a string number or integer, convert to string for comparison
+      // It's an integer, find the class by converting to text
       classQuery = supabase
         .from('classes')
         .select('id, name')
@@ -1066,17 +965,17 @@ app.post('/api/admin/learners', authenticateToken, authenticateAdmin, async (req
       console.error('Class check error:', classError);
       return res.status(404).json({
         success: false,
-        message: 'Class not found'
+        message: 'Class not found. Please select a valid class.'
       });
     }
     
-    console.log('Found class:', classExists);
+    console.log('Found class with ID:', classExists.id);
     
-    // Insert new learner with UUID class_id
+    // Insert new learner with class_id as UUID
     const learnerData = {
       name: name,
       reg_number: reg_number,
-      class_id: classExists.id,
+      class_id: classExists.id, // Use the UUID from the class
       form: form || getFormName(classExists.name),
       status: 'Active',
       enrollment_date: enrollment_date || new Date().toISOString().split('T')[0],
@@ -1913,7 +1812,7 @@ app.listen(PORT, () => {
   console.log('   PUT    /api/admin/classes/:id');
   console.log('   DELETE /api/admin/classes/:id');
   console.log('   GET    /api/admin/learners');
-  console.log('   POST   /api/admin/learners ✅ (UUID Fixed)');
+  console.log('   POST   /api/admin/learners ✅ (UUID Fixed - Single Endpoint)');
   console.log('   PUT    /api/admin/learners/:id');
   console.log('   DELETE /api/admin/learners/:id');
   console.log('   GET    /api/admin/audit-logs');
