@@ -859,22 +859,14 @@ app.get('/api/admin/learners', authenticateToken, authenticateAdmin, async (req,
   try {
     const { data: learners, error } = await supabase
       .from('learners')
-      .select(`
-        *,
-        class:class_id(id, name, year)   -- alias "class"
-      `)
+      .select('*')
       .order('name', { ascending: true });
     
     if (error) throw error;
     
-    const formattedLearners = (learners || []).map(l => ({
-      ...l,
-      class_name: l.class?.name || null   // now this works
-    }));
-    
     res.json({
       success: true,
-      learners: formattedLearners
+      learners: learners || []
     });
   } catch (err) {
     console.error('Error fetching learners:', err);
