@@ -884,24 +884,123 @@ app.delete('/api/admin/classes/:classId', authenticateToken, authenticateAdmin, 
 });
 
 // Get all learners (admin view)
-app.get('/api/admin/learners', authenticateToken, authenticateAdmin, async (req, res) => {
+// In your server.js POST /api/admin/learners endpoint
+app.post('/api/admin/learners', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
-    const { data: learners, error } = await supabase
-      .from('learners')
-      .select('*')
-      .order('name', { ascending: true });
+    const { name, reg_number, class_id, form, enrollment_date } = req.body;
     
-    if (error) throw error;
+    console.log('📝 Admin registering learner:', { name, reg_number, class_id, form, enrollment_date });
+    console.log('Class ID type:', typeof class_id, 'Value:', class_id);
+    
+    // Validate required fields
+    if (!name || !reg_number || !class_id) {
+      return res.status(400).json({
+        success: false,
+        message: 'Name, registration number, and class are required'
+      });
+    }
+    
+    // Check if registration number already exists
+    const { data: existing, error: checkError } = await supabase
+      .from('learners')
+      .select('id')
+      .eq('reg_number', reg_number)
+      .maybeSingle();
+    
+    if (existing) {
+      return res.status(409).json({
+        success: false,
+        message: 'Registration number already exists'
+      });
+    }
+    
+    // IMPORTANT: For UUID, class_id should already be a UUID string
+    // If it's a number, we need to convert it to UUID format
+    let classIdToQuery = class_id;
+    
+    // If class_id is a number or string number, we need to find the actual UUID
+    if (!class_id.includes('-')) {
+      // It's likely an integer ID, find the corresponding UUID
+      const { data: classData, error: classError } = await supabase
+        .from('classes')
+        .select('id')
+        .eq('id::text', class_id.toString())
+        .maybeSingle();
+      
+      if (classError || !classData) {
+        return res.status(404).json({
+          success: false,
+          message: 'Class not found'
+        });
+      }
+      
+      classIdToQuery = classData.id;
+    }
+    
+    // Check if class exists
+    const { data: classExists, error: classError } = await supabase
+      .from('classes')
+      .select('id, name')
+      .eq('id', classIdToQuery)
+      .maybeSingle();
+    
+    if (classError || !classExists) {
+      console.error('Class check error:', classError);
+      return res.status(404).json({
+        success: false,
+        message: 'Class not found'
+      });
+    }
+    
+    console.log('Found class with UUID:', classExists.id);
+    
+    // Insert new learner with UUID class_id
+    const learnerData = {
+      name: name,
+      reg_number: reg_number,
+      class_id: classExists.id, // Use the UUID
+      form: form || getFormName(classExists.name),
+      status: 'Active',
+      enrollment_date: enrollment_date || new Date().toISOString().split('T')[0],
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    };
+    
+    console.log('Inserting learner with data:', learnerData);
+    
+    const { data: newLearner, error } = await supabase
+      .from('learners')
+      .insert(learnerData)
+      .select()
+      .single();
+    
+    if (error) {
+      console.error('Supabase insert error:', error);
+      return res.status(500).json({
+        success: false,
+        message: 'Database error: ' + error.message,
+        error: error.message
+      });
+    }
+    
+    await logAdminAction(
+      req.user.id,
+      'REGISTER_LEARNER',
+      `Registered learner: ${name} (${reg_number}) in class ${classExists.name}`,
+      req.ip
+    );
     
     res.json({
       success: true,
-      learners: learners || []
+      message: 'Learner registered successfully',
+      learner: newLearner
     });
+    
   } catch (err) {
-    console.error('Error fetching learners:', err);
+    console.error('Error registering learner:', err);
     res.status(500).json({
       success: false,
-      message: 'Database error',
+      message: 'Database error: ' + err.message,
       error: err.message
     });
   }
