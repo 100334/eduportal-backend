@@ -856,10 +856,26 @@ app.delete('/api/admin/teachers/:teacherId', authenticateToken, authenticateAdmi
   }
 });
 // Register a new teacher
+// ============================================
+// TEACHER API ENDPOINTS - Using Users Table
+// ============================================
+
+// Register a new teacher (Using users table)
 app.post('/api/admin/teachers', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
-    const { username, email, password, department, specialization, phone, address } = req.body;
+    const { 
+      username, 
+      email, 
+      password, 
+      department, 
+      specialization, 
+      phone, 
+      address 
+    } = req.body;
     
+    console.log('📝 Admin registering teacher:', { username, email, department });
+    
+    // Validate required fields
     if (!username || !email || !password) {
       return res.status(400).json({
         success: false,
@@ -867,10 +883,11 @@ app.post('/api/admin/teachers', authenticateToken, authenticateAdmin, async (req
       });
     }
     
+    // Check if email already exists
     const { data: existing, error: checkError } = await supabase
       .from('users')
       .select('id')
-      .eq('email', email)
+      .eq('email', email.toLowerCase())
       .maybeSingle();
     
     if (existing) {
@@ -880,39 +897,208 @@ app.post('/api/admin/teachers', authenticateToken, authenticateAdmin, async (req
       });
     }
     
-    const { data: newTeacher, error } = await supabase
+    // Generate employee ID
+    const year = new Date().getFullYear();
+    const randomNum = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
+    const employeeId = `TCH-${year}-${randomNum}`;
+    
+    // Insert into users table with teacher role
+    const { data: newUser, error } = await supabase
       .from('users')
       .insert({
-        email: email.toLowerCase(),
-        name: username,
-        password_hash: password,
+        email: email.toLowerCase().trim(),
+        name: username.trim(),
+        password_hash: password, // In production, hash this!
         role: 'teacher',
-        department: department || null,
-        specialization: specialization || null,
-        phone: phone || null,
-        address: address || null,
+        department: department?.trim() || null,
+        specialization: specialization?.trim() || null,
+        phone: phone?.trim() || null,
+        address: address?.trim() || null,
+        employee_id: employeeId,
+        is_active: true,
         created_at: new Date().toISOString()
       })
       .select()
       .single();
     
-    if (error) throw error;
+    if (error) {
+      console.error('Insert error:', error);
+      return res.status(500).json({
+        success: false,
+        message: 'Database error: ' + error.message,
+        details: error
+      });
+    }
     
     await logAdminAction(
       req.user.id,
       'REGISTER_TEACHER',
-      `Registered teacher: ${username} (${email})`,
+      `Registered teacher: ${username} (${email}) with employee ID: ${employeeId}`,
       req.ip
     );
     
     res.json({
       success: true,
       message: 'Teacher registered successfully',
-      teacher: newTeacher
+      teacher: {
+        id: newUser.id,
+        name: newUser.name,
+        email: newUser.email,
+        department: newUser.department,
+        specialization: newUser.specialization,
+        phone: newUser.phone,
+        address: newUser.address,
+        employee_id: newUser.employee_id,
+        role: newUser.role
+      }
     });
     
   } catch (err) {
     console.error('Error registering teacher:', err);
+    res.status(500).json({
+      success: false,
+      message: 'Database error: ' + err.message,
+      error: err.message
+    });
+  }
+});
+
+// Get all teachers (Using users table)
+app.get('/api/admin/teachers', authenticateToken, authenticateAdmin, async (req, res) => {
+  try {
+    const { data: teachers, error } = await supabase
+      .from('users')
+      .select('id, email, name, department, specialization, phone, address, employee_id, is_active, created_at')
+      .eq('role', 'teacher')
+      .order('name', { ascending: true });
+    
+    if (error) throw error;
+    
+    const formattedTeachers = (teachers || []).map(teacher => ({
+      id: teacher.id,
+      full_name: teacher.name,
+      email: teacher.email,
+      department: teacher.department || 'Not specified',
+      specialization: teacher.specialization || 'Not specified',
+      employee_id: teacher.employee_id || `TCH-${teacher.id}`,
+      phone: teacher.phone || 'Not provided',
+      address: teacher.address || 'Not provided',
+      is_active: teacher.is_active !== false,
+      joined_at: teacher.created_at
+    }));
+    
+    res.json({
+      success: true,
+      teachers: formattedTeachers
+    });
+  } catch (err) {
+    console.error('Error fetching teachers:', err);
+    res.json({
+      success: true,
+      teachers: [],
+      message: 'No teachers found'
+    });
+  }
+});
+
+// Update teacher
+app.put('/api/admin/teachers/:teacherId', authenticateToken, authenticateAdmin, async (req, res) => {
+  try {
+    const { teacherId } = req.params;
+    const { name, email, department, specialization, phone, address, is_active } = req.body;
+    
+    const updateData = {};
+    if (name) updateData.name = name;
+    if (email) updateData.email = email;
+    if (department) updateData.department = department;
+    if (specialization) updateData.specialization = specialization;
+    if (phone) updateData.phone = phone;
+    if (address) updateData.address = address;
+    if (is_active !== undefined) updateData.is_active = is_active;
+    updateData.updated_at = new Date().toISOString();
+    
+    const { data: updatedTeacher, error } = await supabase
+      .from('users')
+      .update(updateData)
+      .eq('id', teacherId)
+      .eq('role', 'teacher')
+      .select()
+      .single();
+    
+    if (error) {
+      if (error.code === 'PGRST116') {
+        return res.status(404).json({
+          success: false,
+          message: 'Teacher not found'
+        });
+      }
+      throw error;
+    }
+    
+    await logAdminAction(
+      req.user.id,
+      'UPDATE_TEACHER',
+      `Updated teacher ID ${teacherId}`,
+      req.ip
+    );
+    
+    res.json({
+      success: true,
+      message: 'Teacher updated successfully',
+      teacher: updatedTeacher
+    });
+    
+  } catch (err) {
+    console.error('Error updating teacher:', err);
+    res.status(500).json({
+      success: false,
+      message: 'Database error',
+      error: err.message
+    });
+  }
+});
+
+// Delete teacher
+app.delete('/api/admin/teachers/:teacherId', authenticateToken, authenticateAdmin, async (req, res) => {
+  try {
+    const { teacherId } = req.params;
+    
+    const { data: teacher, error: getError } = await supabase
+      .from('users')
+      .select('name')
+      .eq('id', teacherId)
+      .eq('role', 'teacher')
+      .single();
+    
+    if (getError) {
+      return res.status(404).json({
+        success: false,
+        message: 'Teacher not found'
+      });
+    }
+    
+    const { error } = await supabase
+      .from('users')
+      .delete()
+      .eq('id', teacherId)
+      .eq('role', 'teacher');
+    
+    if (error) throw error;
+    
+    await logAdminAction(
+      req.user.id,
+      'DELETE_TEACHER',
+      `Deleted teacher ID ${teacherId}: ${teacher?.name}`,
+      req.ip
+    );
+    
+    res.json({
+      success: true,
+      message: 'Teacher deleted successfully'
+    });
+    
+  } catch (err) {
+    console.error('Error deleting teacher:', err);
     res.status(500).json({
       success: false,
       message: 'Database error',
