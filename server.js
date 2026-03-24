@@ -169,6 +169,21 @@ const logAdminAction = async (userId, action, details, ip = null) => {
   }
 };
 
+// Helper function to get form name from class name
+function getFormName(className) {
+  if (!className) return 'Form 1';
+  const match = className.match(/Form\s*(\d+)/i);
+  if (match) {
+    const formNumber = match[1];
+    return `Form ${formNumber}`;
+  }
+  const numMatch = className.match(/^(\d+)/);
+  if (numMatch) {
+    return `Form ${numMatch[1]}`;
+  }
+  return 'Form 1';
+}
+
 // ============================================
 // PUBLIC TEST ENDPOINTS
 // ============================================
@@ -556,22 +571,35 @@ app.get('/api/admin/teachers', authenticateToken, authenticateAdmin, async (req,
   try {
     const { data: teachers, error } = await supabase
       .from('users')
-      .select('id, email, name, phone, address, department, specialization, created_at')
+      .select('id, email, name, phone, address, department, specialization, created_at, is_active')
       .eq('role', 'teacher')
       .order('name', { ascending: true });
     
     if (error) throw error;
     
+    const formattedTeachers = (teachers || []).map(teacher => ({
+      id: teacher.id,
+      full_name: teacher.name || teacher.email,
+      email: teacher.email,
+      department: teacher.department || 'General',
+      specialization: teacher.specialization || 'Not specified',
+      employee_id: teacher.employee_id || `TCH-${teacher.id}`,
+      phone: teacher.phone || 'Not provided',
+      is_active: teacher.is_active !== false,
+      qualification: teacher.qualification || 'Not specified',
+      joined_at: teacher.created_at
+    }));
+    
     res.json({
       success: true,
-      teachers: teachers || []
+      teachers: formattedTeachers
     });
   } catch (err) {
     console.error('Error fetching teachers:', err);
-    res.status(500).json({
-      success: false,
-      message: 'Database error',
-      error: err.message
+    res.json({
+      success: true,
+      teachers: [],
+      message: 'No teachers found'
     });
   }
 });
@@ -642,7 +670,7 @@ app.post('/api/admin/teachers', authenticateToken, authenticateAdmin, async (req
   }
 });
 
-// Get all classes
+// Get all classes - Updated to handle UUIDs
 app.get('/api/admin/classes', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
     const { data: classes, error } = await supabase
@@ -664,6 +692,7 @@ app.get('/api/admin/classes', authenticateToken, authenticateAdmin, async (req, 
       
       return {
         ...cls,
+        id: cls.id.toString(),
         teacher_name: cls.teacher?.name || null,
         teacher_email: cls.teacher?.email || null,
         learner_count: count || 0
@@ -734,7 +763,7 @@ app.post('/api/admin/classes', authenticateToken, authenticateAdmin, async (req,
     res.json({
       success: true,
       message: 'Class created successfully',
-      class: newClass
+      class: { ...newClass, id: newClass.id.toString() }
     });
     
   } catch (err) {
@@ -855,18 +884,42 @@ app.delete('/api/admin/classes/:classId', authenticateToken, authenticateAdmin, 
 });
 
 // Get all learners (admin view)
-// Register a new learner (Admin) - UPDATED to accept all fields
+app.get('/api/admin/learners', authenticateToken, authenticateAdmin, async (req, res) => {
+  try {
+    const { data: learners, error } = await supabase
+      .from('learners')
+      .select('*')
+      .order('name', { ascending: true });
+    
+    if (error) throw error;
+    
+    res.json({
+      success: true,
+      learners: learners || []
+    });
+  } catch (err) {
+    console.error('Error fetching learners:', err);
+    res.status(500).json({
+      success: false,
+      message: 'Database error',
+      error: err.message
+    });
+  }
+});
+
+// Register a new learner (Admin) - UPDATED for UUID handling
 app.post('/api/admin/learners', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
     const { 
-      name,           // Changed from username to name
+      name, 
       reg_number, 
       class_id, 
-      form,           // Add form field
-      enrollment_date // Add enrollment_date field
+      form, 
+      enrollment_date 
     } = req.body;
     
     console.log('📝 Admin registering learner:', { name, reg_number, class_id, form, enrollment_date });
+    console.log('Class ID type:', typeof class_id, 'Value:', class_id);
     
     // Validate required fields
     if (!name || !reg_number || !class_id) {
@@ -890,39 +943,63 @@ app.post('/api/admin/learners', authenticateToken, authenticateAdmin, async (req
       });
     }
     
-    // Check if class exists
-    const { data: classExists, error: classError } = await supabase
-      .from('classes')
-      .select('id, name')
-      .eq('id', class_id)
-      .maybeSingle();
+    // Check if class exists - handle both integer and UUID
+    let classQuery;
+    if (typeof class_id === 'string' && class_id.includes('-')) {
+      // It's a UUID
+      classQuery = supabase
+        .from('classes')
+        .select('id, name')
+        .eq('id', class_id)
+        .maybeSingle();
+    } else {
+      // It might be a string number or integer, convert to string for comparison
+      classQuery = supabase
+        .from('classes')
+        .select('id, name')
+        .eq('id', String(class_id))
+        .maybeSingle();
+    }
     
-    if (!classExists) {
+    const { data: classExists, error: classError } = await classQuery;
+    
+    if (classError || !classExists) {
+      console.error('Class check error:', classError);
       return res.status(404).json({
         success: false,
         message: 'Class not found'
       });
     }
     
-    // Insert new learner with all fields
+    console.log('Found class:', classExists);
+    
+    // Insert new learner with UUID class_id
+    const learnerData = {
+      name: name,
+      reg_number: reg_number,
+      class_id: classExists.id,
+      form: form || getFormName(classExists.name),
+      status: 'Active',
+      enrollment_date: enrollment_date || new Date().toISOString().split('T')[0],
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    };
+    
+    console.log('Inserting learner with data:', learnerData);
+    
     const { data: newLearner, error } = await supabase
       .from('learners')
-      .insert({
-        name: name,
-        reg_number: reg_number,
-        class_id: class_id,
-        form: form || getFormName(classExists.name), // Use provided form or derive from class name
-        status: 'Active',
-        enrollment_date: enrollment_date || new Date().toISOString().split('T')[0],
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
-      })
+      .insert(learnerData)
       .select()
       .single();
     
     if (error) {
       console.error('Supabase insert error:', error);
-      throw error;
+      return res.status(500).json({
+        success: false,
+        message: 'Database error: ' + error.message,
+        error: error.message
+      });
     }
     
     await logAdminAction(
@@ -948,132 +1025,16 @@ app.post('/api/admin/learners', authenticateToken, authenticateAdmin, async (req
   }
 });
 
-// Helper function to get form name from class name
-function getFormName(className) {
-  if (!className) return 'Form 1';
-  const match = className.match(/Form\s*(\d+)/i);
-  if (match) {
-    const formNumber = match[1];
-    return `Form ${formNumber}`;
-  }
-  
-  // Extract number from class name like "1A", "2B", etc.
-  const numMatch = className.match(/^(\d+)/);
-  if (numMatch) {
-    return `Form ${numMatch[1]}`;
-  }
-  
-  return 'Form 1';
-}
-
-// Register a new learner (Admin)
-app.post('/api/admin/learners', authenticateToken, authenticateAdmin, async (req, res) => {
-  try {
-    const { username, reg_number, class_id } = req.body;
-    
-    console.log('📝 Admin registering learner:', { username, reg_number, class_id });
-    
-    if (!username || !reg_number || !class_id) {
-      return res.status(400).json({
-        success: false,
-        message: 'Username, registration number, and class are required'
-      });
-    }
-    
-    // Check if registration number already exists
-    const { data: existing, error: checkError } = await supabase
-      .from('learners')
-      .select('id')
-      .eq('reg_number', reg_number)
-      .maybeSingle();
-    
-    if (existing) {
-      return res.status(409).json({
-        success: false,
-        message: 'Registration number already exists'
-      });
-    }
-    
-    // Check if class exists
-    const { data: classExists, error: classError } = await supabase
-      .from('classes')
-      .select('id, name')
-      .eq('id', class_id)
-      .maybeSingle();
-    
-    if (!classExists) {
-      return res.status(404).json({
-        success: false,
-        message: 'Class not found'
-      });
-    }
-    
-    // Insert new learner
-    const { data: newLearner, error } = await supabase
-      .from('learners')
-      .insert({
-        name: username,
-        reg_number: reg_number,
-        class_id: class_id,
-        status: 'Active',
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
-      })
-      .select()
-      .single();
-    
-    if (error) throw error;
-    
-    await logAdminAction(
-      req.user.id,
-      'REGISTER_LEARNER',
-      `Registered learner: ${username} (${reg_number}) in class ${classExists.name}`,
-      req.ip
-    );
-    
-    res.json({
-      success: true,
-      message: 'Learner registered successfully',
-      learner: newLearner
-    });
-    
-  } catch (err) {
-    console.error('Error registering learner:', err);
-    res.status(500).json({
-      success: false,
-      message: 'Database error',
-      error: err.message
-    });
-  }
-});
-
 // Update a learner (Admin)
 app.put('/api/admin/learners/:learnerId', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
     const { learnerId } = req.params;
-    const { username, reg_number, class_id } = req.body;
-    
-    // Check if registration number already exists for another learner
-    if (reg_number) {
-      const { data: existing, error: checkError } = await supabase
-        .from('learners')
-        .select('id')
-        .eq('reg_number', reg_number)
-        .neq('id', learnerId)
-        .maybeSingle();
-      
-      if (existing) {
-        return res.status(409).json({
-          success: false,
-          message: 'Registration number already exists'
-        });
-      }
-    }
+    const { name, class_id, form } = req.body;
     
     const updateData = {};
-    if (username) updateData.name = username;
-    if (reg_number) updateData.reg_number = reg_number;
+    if (name) updateData.name = name;
     if (class_id) updateData.class_id = class_id;
+    if (form) updateData.form = form;
     updateData.updated_at = new Date().toISOString();
     
     const { data: updatedLearner, error } = await supabase
@@ -1120,32 +1081,6 @@ app.put('/api/admin/learners/:learnerId', authenticateToken, authenticateAdmin, 
 app.delete('/api/admin/learners/:learnerId', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
     const { learnerId } = req.params;
-    
-    // Check for attendance records
-    const { count: attendanceCount, error: checkAttendance } = await supabase
-      .from('attendance')
-      .select('*', { count: 'exact', head: true })
-      .eq('learner_id', learnerId);
-    
-    if (attendanceCount > 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Cannot delete learner with attendance records'
-      });
-    }
-    
-    // Check for report cards
-    const { count: reportsCount, error: checkReports } = await supabase
-      .from('reports')
-      .select('*', { count: 'exact', head: true })
-      .eq('learner_id', learnerId);
-    
-    if (reportsCount > 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Cannot delete learner with report cards'
-      });
-    }
     
     const { data: deletedLearner, error } = await supabase
       .from('learners')
@@ -1308,36 +1243,25 @@ app.get('/api/teacher/learners/:classId', authenticateToken, async (req, res) =>
 // Add learner (Teacher)
 app.post('/api/teacher/learners', authenticateToken, async (req, res) => {
   try {
-    const { username, name, reg_number, class_id } = req.body;
+    const { name, reg_number, class_id } = req.body;
     
-    const learnerName = username || name;
-    
-    if (!learnerName) {
+    if (!name) {
       return res.status(400).json({ 
         success: false,
         error: 'Name is required' 
       });
     }
     
-    // Generate registration number if not provided
-    let finalRegNumber = reg_number;
-    if (!finalRegNumber) {
-      const year = new Date().getFullYear();
-      const random = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
-      finalRegNumber = `EDU-${year}-${random}`;
-    }
-    
     const learnerData = {
-      name: learnerName?.trim(),
-      reg_number: finalRegNumber,
+      name: name?.trim(),
+      reg_number: reg_number || `EDU-${new Date().getFullYear()}-${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`,
       status: 'Active',
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
     };
     
-    // Add class_id if provided
     if (class_id) {
-      learnerData.class_id = parseInt(class_id);
+      learnerData.class_id = class_id;
     }
     
     const { data, error } = await supabase
@@ -1365,11 +1289,10 @@ app.post('/api/teacher/learners', authenticateToken, async (req, res) => {
 app.put('/api/teacher/learners/:id', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, reg_number, class_id, status } = req.body;
+    const { name, class_id, status } = req.body;
     
     const updateData = {};
     if (name) updateData.name = name;
-    if (reg_number) updateData.reg_number = reg_number;
     if (class_id) updateData.class_id = class_id;
     if (status) updateData.status = status;
     updateData.updated_at = new Date().toISOString();
@@ -1459,7 +1382,6 @@ app.post('/api/teacher/attendance', authenticateToken, async (req, res) => {
       });
     }
     
-    // Delete existing record for the same day if exists
     await supabase
       .from('attendance')
       .delete()
@@ -1543,7 +1465,7 @@ app.get('/api/attendance/summary/:classId', authenticateToken, async (req, res) 
 });
 
 // ============================================
-// LEARNER ROUTES (Enhanced)
+// LEARNER ROUTES
 // ============================================
 
 // Get learner profile
@@ -1618,16 +1540,11 @@ app.get('/api/learner/attendance-stats', authenticateToken, async (req, res) => 
   }
 });
 
-// ============================================
-// LEARNER REPORTS ROUTES (NEW - FIXED 404)
-// ============================================
-
 // Get learner reports
 app.get('/api/learner/reports', authenticateToken, async (req, res) => {
   try {
     console.log(`📊 Fetching reports for learner: ${req.user.id}`);
     
-    // Fetch reports for the authenticated learner
     const { data: reports, error } = await supabase
       .from('reports')
       .select(`
@@ -1641,7 +1558,6 @@ app.get('/api/learner/reports', authenticateToken, async (req, res) => {
     
     if (error) {
       console.log('No reports table found or error:', error.message);
-      // Return empty array if table doesn't exist yet
       return res.json({
         success: true,
         data: [],
@@ -1650,7 +1566,6 @@ app.get('/api/learner/reports', authenticateToken, async (req, res) => {
       });
     }
     
-    // Format reports for frontend
     const formattedReports = (reports || []).map(report => ({
       id: report.id,
       subject: report.subject?.name || 'Unknown',
@@ -1682,14 +1597,13 @@ app.get('/api/learner/reports', authenticateToken, async (req, res) => {
   }
 });
 
-// Get learner report card (summary)
+// Get learner report card
 app.get('/api/learner/report-card', authenticateToken, async (req, res) => {
   try {
     const { term, year } = req.query;
     const currentYear = year || new Date().getFullYear();
     const currentTerm = term || 'Term 1';
     
-    // Get all reports for the learner
     let query = supabase
       .from('reports')
       .select(`
@@ -1706,7 +1620,6 @@ app.get('/api/learner/report-card', authenticateToken, async (req, res) => {
     const { data: reports, error } = await query.order('subject_id');
     
     if (error) {
-      // Return empty if no reports table
       return res.json({
         success: true,
         data: {
@@ -1724,7 +1637,6 @@ app.get('/api/learner/report-card', authenticateToken, async (req, res) => {
       });
     }
     
-    // Calculate summary
     const totalScore = (reports || []).reduce((sum, r) => sum + (r.score || 0), 0);
     const averageScore = reports?.length > 0 ? Math.round(totalScore / reports.length) : 0;
     
@@ -1757,7 +1669,6 @@ app.get('/api/learner/report-card', authenticateToken, async (req, res) => {
 // Get learner dashboard stats
 app.get('/api/learner/dashboard/stats', authenticateToken, async (req, res) => {
   try {
-    // Get attendance stats
     const { data: attendance, error: attendanceError } = await supabase
       .from('attendance')
       .select('status')
@@ -1768,7 +1679,6 @@ app.get('/api/learner/dashboard/stats', authenticateToken, async (req, res) => {
     const presentAttendance = attendance?.filter(a => a.status === 'present').length || 0;
     const attendanceRate = totalAttendance > 0 ? Math.round((presentAttendance / totalAttendance) * 100) : 0;
     
-    // Get report stats
     const { data: reports, error: reportsError } = await supabase
       .from('reports')
       .select('score')
@@ -1829,65 +1739,9 @@ app.get('/api/debug/learners-table', async (req, res) => {
       tableExists: true,
       columns: columns,
       hasData: sample && sample.length > 0,
-      sampleData: sample && sample.length > 0 ? sample[0] : null,
-      missingForm: !columns.includes('form'),
-      suggestion: !columns.includes('form') ? 'Need to add "form" column. Run: ALTER TABLE learners ADD COLUMN form TEXT;' : null
+      sampleData: sample && sample.length > 0 ? sample[0] : null
     });
   } catch (error) {
-    res.json({ success: false, error: error.message });
-  }
-});
-
-// Debug endpoint to test attendance
-app.get('/api/debug/attendance-test', async (req, res) => {
-  try {
-    const { data: learner, error: learnerError } = await supabase
-      .from('learners')
-      .select('id, name')
-      .limit(1)
-      .single();
-    
-    if (learnerError || !learner) {
-      return res.json({ 
-        success: false, 
-        error: 'No learners found in database',
-        details: learnerError?.message
-      });
-    }
-    
-    console.log('Found learner for test:', learner);
-    
-    const testData = {
-      learner_id: learner.id,
-      date: new Date().toISOString().split('T')[0],
-      status: 'present'
-    };
-    
-    const { data, error } = await supabase
-      .from('attendance')
-      .upsert([testData], { onConflict: 'learner_id,date' })
-      .select();
-    
-    if (error) {
-      return res.json({ 
-        success: false, 
-        error: error.message,
-        details: error.details,
-        code: error.code,
-        hint: error.hint
-      });
-    }
-    
-    res.json({ 
-      success: true, 
-      message: 'Attendance test successful!',
-      learner: learner.name,
-      learnerId: learner.id,
-      record: data[0]
-    });
-    
-  } catch (error) {
-    console.error('Debug endpoint error:', error);
     res.json({ success: false, error: error.message });
   }
 });
@@ -1960,7 +1814,7 @@ app.listen(PORT, () => {
   console.log('   PUT    /api/admin/classes/:id');
   console.log('   DELETE /api/admin/classes/:id');
   console.log('   GET    /api/admin/learners');
-  console.log('   POST   /api/admin/learners');
+  console.log('   POST   /api/admin/learners ✅ (UUID Fixed)');
   console.log('   PUT    /api/admin/learners/:id');
   console.log('   DELETE /api/admin/learners/:id');
   console.log('   GET    /api/admin/audit-logs');
@@ -1975,9 +1829,9 @@ app.listen(PORT, () => {
   console.log('   POST   /api/teacher/attendance');
   console.log('   GET    /api/attendance/summary/:classId');
   
-  console.log('\n📋 Learner API Endpoints (NEW):');
+  console.log('\n📋 Learner API Endpoints:');
   console.log('   GET    /api/learner/profile');
-  console.log('   GET    /api/learner/reports ✅ (FIXED)');
+  console.log('   GET    /api/learner/reports');
   console.log('   GET    /api/learner/report-card');
   console.log('   GET    /api/learner/attendance');
   console.log('   GET    /api/learner/attendance-stats');
