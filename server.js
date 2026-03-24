@@ -1305,6 +1305,251 @@ app.delete('/api/admin/audit-logs/clear', authenticateToken, authenticateAdmin, 
 });
 
 // ============================================
+// SUBJECT MANAGEMENT ROUTES (NEW)
+// ============================================
+
+// Get all subjects for a specific class
+app.get('/api/admin/subjects/:classId', authenticateToken, authenticateAdmin, async (req, res) => {
+  try {
+    const { classId } = req.params;
+    
+    console.log(`📚 Fetching subjects for class: ${classId}`);
+    
+    const { data: subjects, error } = await supabase
+      .from('subjects')
+      .select('*')
+      .eq('class_id', classId)
+      .order('display_order', { ascending: true });
+    
+    if (error) {
+      // If table doesn't exist, return empty array
+      console.log('Subjects table may not exist yet:', error.message);
+      return res.json({
+        success: true,
+        subjects: []
+      });
+    }
+    
+    res.json({
+      success: true,
+      subjects: subjects || []
+    });
+    
+  } catch (err) {
+    console.error('Error fetching subjects:', err);
+    res.status(500).json({
+      success: false,
+      message: 'Database error',
+      error: err.message
+    });
+  }
+});
+
+// Create a new subject
+app.post('/api/admin/subjects', authenticateToken, authenticateAdmin, async (req, res) => {
+  try {
+    const { class_id, name, code, description, display_order } = req.body;
+    
+    console.log('📝 Creating new subject:', { class_id, name, code });
+    
+    if (!class_id || !name) {
+      return res.status(400).json({
+        success: false,
+        message: 'Class ID and subject name are required'
+      });
+    }
+    
+    // Check if class exists
+    const { data: classExists, error: classError } = await supabase
+      .from('classes')
+      .select('id')
+      .eq('id', class_id)
+      .maybeSingle();
+    
+    if (!classExists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Class not found'
+      });
+    }
+    
+    // Check if subject already exists for this class
+    const { data: existing, error: checkError } = await supabase
+      .from('subjects')
+      .select('id')
+      .eq('class_id', class_id)
+      .eq('name', name)
+      .maybeSingle();
+    
+    if (existing) {
+      return res.status(409).json({
+        success: false,
+        message: 'Subject already exists for this class'
+      });
+    }
+    
+    // Get current max display order if not provided
+    let finalDisplayOrder = display_order;
+    if (!finalDisplayOrder) {
+      const { data: maxOrder, error: orderError } = await supabase
+        .from('subjects')
+        .select('display_order')
+        .eq('class_id', class_id)
+        .order('display_order', { ascending: false })
+        .limit(1);
+      
+      finalDisplayOrder = (maxOrder && maxOrder[0]?.display_order || 0) + 1;
+    }
+    
+    const { data: newSubject, error } = await supabase
+      .from('subjects')
+      .insert({
+        class_id: class_id,
+        name: name.trim(),
+        code: code?.trim() || null,
+        description: description?.trim() || null,
+        display_order: finalDisplayOrder,
+        status: 'Active',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      })
+      .select()
+      .single();
+    
+    if (error) throw error;
+    
+    await logAdminAction(
+      req.user.id,
+      'CREATE_SUBJECT',
+      `Created subject: ${name} for class ID ${class_id}`,
+      req.ip
+    );
+    
+    res.json({
+      success: true,
+      message: 'Subject created successfully',
+      subject: newSubject
+    });
+    
+  } catch (err) {
+    console.error('Error creating subject:', err);
+    res.status(500).json({
+      success: false,
+      message: 'Database error: ' + err.message
+    });
+  }
+});
+
+// Update a subject
+app.put('/api/admin/subjects/:subjectId', authenticateToken, authenticateAdmin, async (req, res) => {
+  try {
+    const { subjectId } = req.params;
+    const { name, code, description, display_order, status } = req.body;
+    
+    const updateData = {};
+    if (name) updateData.name = name;
+    if (code) updateData.code = code;
+    if (description) updateData.description = description;
+    if (display_order !== undefined) updateData.display_order = display_order;
+    if (status) updateData.status = status;
+    updateData.updated_at = new Date().toISOString();
+    
+    const { data: updatedSubject, error } = await supabase
+      .from('subjects')
+      .update(updateData)
+      .eq('id', subjectId)
+      .select()
+      .single();
+    
+    if (error) {
+      if (error.code === 'PGRST116') {
+        return res.status(404).json({
+          success: false,
+          message: 'Subject not found'
+        });
+      }
+      throw error;
+    }
+    
+    await logAdminAction(
+      req.user.id,
+      'UPDATE_SUBJECT',
+      `Updated subject ID ${subjectId}`,
+      req.ip
+    );
+    
+    res.json({
+      success: true,
+      message: 'Subject updated successfully',
+      subject: updatedSubject
+    });
+    
+  } catch (err) {
+    console.error('Error updating subject:', err);
+    res.status(500).json({
+      success: false,
+      message: 'Database error: ' + err.message
+    });
+  }
+});
+
+// Delete a subject
+app.delete('/api/admin/subjects/:subjectId', authenticateToken, authenticateAdmin, async (req, res) => {
+  try {
+    const { subjectId } = req.params;
+    
+    // Check if subject has any reports
+    const { count: reportsCount, error: checkReports } = await supabase
+      .from('reports')
+      .select('*', { count: 'exact', head: true })
+      .eq('subject_id', subjectId);
+    
+    if (reportsCount > 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Cannot delete subject with existing report cards'
+      });
+    }
+    
+    const { data: deletedSubject, error } = await supabase
+      .from('subjects')
+      .delete()
+      .eq('id', subjectId)
+      .select()
+      .single();
+    
+    if (error) {
+      if (error.code === 'PGRST116') {
+        return res.status(404).json({
+          success: false,
+          message: 'Subject not found'
+        });
+      }
+      throw error;
+    }
+    
+    await logAdminAction(
+      req.user.id,
+      'DELETE_SUBJECT',
+      `Deleted subject ID ${subjectId}: ${deletedSubject.name}`,
+      req.ip
+    );
+    
+    res.json({
+      success: true,
+      message: 'Subject deleted successfully'
+    });
+    
+  } catch (err) {
+    console.error('Error deleting subject:', err);
+    res.status(500).json({
+      success: false,
+      message: 'Database error: ' + err.message
+    });
+  }
+});
+
+// ============================================
 // TEACHER ROUTES
 // ============================================
 
@@ -1462,7 +1707,7 @@ app.delete('/api/teacher/learners/:id', authenticateToken, async (req, res) => {
   }
 });
 
-// Get subjects for a class
+// Get subjects for a class (Teacher view)
 app.get('/api/teacher/subjects/:classId', authenticateToken, async (req, res) => {
   try {
     const { classId } = req.params;
@@ -1896,6 +2141,10 @@ app.listen(PORT, () => {
   console.log('   DELETE /api/admin/learners/:id');
   console.log('   GET    /api/admin/audit-logs');
   console.log('   DELETE /api/admin/audit-logs/clear');
+  console.log('   GET    /api/admin/subjects/:classId ✅ (NEW)');
+  console.log('   POST   /api/admin/subjects ✅ (NEW)');
+  console.log('   PUT    /api/admin/subjects/:id ✅ (NEW)');
+  console.log('   DELETE /api/admin/subjects/:id ✅ (NEW)');
   
   console.log('\n📋 Teacher API Endpoints:');
   console.log('   GET    /api/teacher/learners');
@@ -1903,6 +2152,7 @@ app.listen(PORT, () => {
   console.log('   POST   /api/teacher/learners');
   console.log('   PUT    /api/teacher/learners/:id');
   console.log('   DELETE /api/teacher/learners/:id');
+  console.log('   GET    /api/teacher/subjects/:classId');
   console.log('   POST   /api/teacher/attendance');
   console.log('   GET    /api/attendance/summary/:classId');
   
