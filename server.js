@@ -861,7 +861,7 @@ app.get('/api/admin/learners', authenticateToken, authenticateAdmin, async (req,
       .from('learners')
       .select(`
         *,
-        class:class_id(id, name, year)
+        class:class_id(id, name, year)   -- alias "class"
       `)
       .order('name', { ascending: true });
     
@@ -869,7 +869,7 @@ app.get('/api/admin/learners', authenticateToken, authenticateAdmin, async (req,
     
     const formattedLearners = (learners || []).map(l => ({
       ...l,
-      class_name: l.class?.name || null
+      class_name: l.class?.name || null   // now this works
     }));
     
     res.json({
