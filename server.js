@@ -521,7 +521,7 @@ app.get('/api/auth/verify', async (req, res) => {
 });
 
 // ============================================
-// ADMIN ROUTES - FULL IMPLEMENTATION
+// ADMIN ROUTES
 // ============================================
 
 // Get admin dashboard stats
@@ -566,142 +566,13 @@ app.get('/api/admin/stats', authenticateToken, authenticateAdmin, async (req, re
   }
 });
 
-// Get all teachers
-// ============================================
-// TEACHER API ENDPOINTS (Using teachers table)
-// ============================================
-
-// Register a new teacher
-app.post('/api/admin/teachers', authenticateToken, authenticateAdmin, async (req, res) => {
-  try {
-    const { 
-      username, 
-      email, 
-      password, 
-      department, 
-      specialization, 
-      phone, 
-      address 
-    } = req.body;
-    
-    console.log('📝 Admin registering teacher:', { username, email, department });
-    
-    // Validate required fields
-    if (!username || !email || !password) {
-      return res.status(400).json({
-        success: false,
-        message: 'Username, email, and password are required'
-      });
-    }
-    
-    // Check if email already exists
-    const { data: existingEmail, error: emailError } = await supabase
-      .from('teachers')
-      .select('id')
-      .eq('email', email.toLowerCase())
-      .maybeSingle();
-    
-    if (existingEmail) {
-      return res.status(409).json({
-        success: false,
-        message: 'Email already exists'
-      });
-    }
-    
-    // Check if employee_id already exists (if provided)
-    if (employee_id) {
-      const { data: existingEmp, error: empError } = await supabase
-        .from('teachers')
-        .select('id')
-        .eq('employee_id', employee_id)
-        .maybeSingle();
-      
-      if (existingEmp) {
-        return res.status(409).json({
-          success: false,
-          message: 'Employee ID already exists'
-        });
-      }
-    }
-    
-    // Generate employee ID if not provided
-    const finalEmployeeId = employee_id || `TCH-${new Date().getFullYear()}-${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`;
-    
-    // Insert new teacher
-    const { data: newTeacher, error } = await supabase
-      .from('teachers')
-      .insert({
-        name: username.trim(),
-        email: email.toLowerCase().trim(),
-        password_hash: password, // In production, hash this!
-        department: department?.trim() || null,
-        specialization: specialization?.trim() || null,
-        phone: phone?.trim() || null,
-        address: address?.trim() || null,
-        employee_id: finalEmployeeId,
-        status: 'Active',
-        joining_date: new Date().toISOString().split('T')[0]
-      })
-      .select()
-      .single();
-    
-    if (error) {
-      console.error('Insert error:', error);
-      return res.status(500).json({
-        success: false,
-        message: 'Database error: ' + error.message
-      });
-    }
-    
-    // Also create a user account for login if using separate auth
-    const { data: user, error: userError } = await supabase
-      .from('users')
-      .insert({
-        email: email.toLowerCase(),
-        name: username,
-        password_hash: password,
-        role: 'teacher',
-        is_active: true
-      })
-      .select()
-      .single();
-    
-    // Update teacher with user_id
-    if (user && !userError) {
-      await supabase
-        .from('teachers')
-        .update({ user_id: user.id })
-        .eq('id', newTeacher.id);
-    }
-    
-    await logAdminAction(
-      req.user.id,
-      'REGISTER_TEACHER',
-      `Registered teacher: ${username} (${email})`,
-      req.ip
-    );
-    
-    res.json({
-      success: true,
-      message: 'Teacher registered successfully',
-      teacher: newTeacher
-    });
-    
-  } catch (err) {
-    console.error('Error registering teacher:', err);
-    res.status(500).json({
-      success: false,
-      message: 'Database error: ' + err.message
-    });
-  }
-});
-
-// Get all teachers
+// Get all teachers (Using users table)
 app.get('/api/admin/teachers', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
     const { data: teachers, error } = await supabase
-      .from('teachers')
-      .select('*')
+      .from('users')
+      .select('id, email, name, department, specialization, phone, address, employee_id, is_active, created_at')
+      .eq('role', 'teacher')
       .order('name', { ascending: true });
     
     if (error) throw error;
@@ -712,13 +583,11 @@ app.get('/api/admin/teachers', authenticateToken, authenticateAdmin, async (req,
       email: teacher.email,
       department: teacher.department || 'Not specified',
       specialization: teacher.specialization || 'Not specified',
-      employee_id: teacher.employee_id,
+      employee_id: teacher.employee_id || `TCH-${teacher.id}`,
       phone: teacher.phone || 'Not provided',
       address: teacher.address || 'Not provided',
-      qualification: teacher.qualification || 'Not specified',
-      status: teacher.status,
-      joined_at: teacher.joining_date,
-      created_at: teacher.created_at
+      is_active: teacher.is_active !== false,
+      joined_at: teacher.created_at
     }));
     
     res.json({
@@ -734,131 +603,6 @@ app.get('/api/admin/teachers', authenticateToken, authenticateAdmin, async (req,
     });
   }
 });
-
-// Update teacher
-app.put('/api/admin/teachers/:teacherId', authenticateToken, authenticateAdmin, async (req, res) => {
-  try {
-    const { teacherId } = req.params;
-    const { name, email, department, specialization, phone, address, status } = req.body;
-    
-    const updateData = {};
-    if (name) updateData.name = name;
-    if (email) updateData.email = email;
-    if (department) updateData.department = department;
-    if (specialization) updateData.specialization = specialization;
-    if (phone) updateData.phone = phone;
-    if (address) updateData.address = address;
-    if (status) updateData.status = status;
-    updateData.updated_at = new Date().toISOString();
-    
-    const { data: updatedTeacher, error } = await supabase
-      .from('teachers')
-      .update(updateData)
-      .eq('id', teacherId)
-      .select()
-      .single();
-    
-    if (error) {
-      if (error.code === 'PGRST116') {
-        return res.status(404).json({
-          success: false,
-          message: 'Teacher not found'
-        });
-      }
-      throw error;
-    }
-    
-    // Also update users table if linked
-    if (updatedTeacher.user_id) {
-      await supabase
-        .from('users')
-        .update({
-          name: updatedTeacher.name,
-          email: updatedTeacher.email
-        })
-        .eq('id', updatedTeacher.user_id);
-    }
-    
-    await logAdminAction(
-      req.user.id,
-      'UPDATE_TEACHER',
-      `Updated teacher ID ${teacherId}`,
-      req.ip
-    );
-    
-    res.json({
-      success: true,
-      message: 'Teacher updated successfully',
-      teacher: updatedTeacher
-    });
-    
-  } catch (err) {
-    console.error('Error updating teacher:', err);
-    res.status(500).json({
-      success: false,
-      message: 'Database error',
-      error: err.message
-    });
-  }
-});
-
-// Delete teacher
-app.delete('/api/admin/teachers/:teacherId', authenticateToken, authenticateAdmin, async (req, res) => {
-  try {
-    const { teacherId } = req.params;
-    
-    // Get teacher info before deletion
-    const { data: teacher, error: getError } = await supabase
-      .from('teachers')
-      .select('*')
-      .eq('id', teacherId)
-      .single();
-    
-    if (getError && getError.code !== 'PGRST116') {
-      throw getError;
-    }
-    
-    // Delete from teachers table
-    const { error } = await supabase
-      .from('teachers')
-      .delete()
-      .eq('id', teacherId);
-    
-    if (error) throw error;
-    
-    // Also delete from users table if linked
-    if (teacher?.user_id) {
-      await supabase
-        .from('users')
-        .delete()
-        .eq('id', teacher.user_id);
-    }
-    
-    await logAdminAction(
-      req.user.id,
-      'DELETE_TEACHER',
-      `Deleted teacher ID ${teacherId}: ${teacher?.name}`,
-      req.ip
-    );
-    
-    res.json({
-      success: true,
-      message: 'Teacher deleted successfully'
-    });
-    
-  } catch (err) {
-    console.error('Error deleting teacher:', err);
-    res.status(500).json({
-      success: false,
-      message: 'Database error',
-      error: err.message
-    });
-  }
-});
-// Register a new teacher
-// ============================================
-// TEACHER API ENDPOINTS - Using Users Table
-// ============================================
 
 // Register a new teacher (Using users table)
 app.post('/api/admin/teachers', authenticateToken, authenticateAdmin, async (req, res) => {
@@ -908,7 +652,7 @@ app.post('/api/admin/teachers', authenticateToken, authenticateAdmin, async (req
       .insert({
         email: email.toLowerCase().trim(),
         name: username.trim(),
-        password_hash: password, // In production, hash this!
+        password_hash: password,
         role: 'teacher',
         department: department?.trim() || null,
         specialization: specialization?.trim() || null,
@@ -925,8 +669,7 @@ app.post('/api/admin/teachers', authenticateToken, authenticateAdmin, async (req
       console.error('Insert error:', error);
       return res.status(500).json({
         success: false,
-        message: 'Database error: ' + error.message,
-        details: error
+        message: 'Database error: ' + error.message
       });
     }
     
@@ -957,46 +700,7 @@ app.post('/api/admin/teachers', authenticateToken, authenticateAdmin, async (req
     console.error('Error registering teacher:', err);
     res.status(500).json({
       success: false,
-      message: 'Database error: ' + err.message,
-      error: err.message
-    });
-  }
-});
-
-// Get all teachers (Using users table)
-app.get('/api/admin/teachers', authenticateToken, authenticateAdmin, async (req, res) => {
-  try {
-    const { data: teachers, error } = await supabase
-      .from('users')
-      .select('id, email, name, department, specialization, phone, address, employee_id, is_active, created_at')
-      .eq('role', 'teacher')
-      .order('name', { ascending: true });
-    
-    if (error) throw error;
-    
-    const formattedTeachers = (teachers || []).map(teacher => ({
-      id: teacher.id,
-      full_name: teacher.name,
-      email: teacher.email,
-      department: teacher.department || 'Not specified',
-      specialization: teacher.specialization || 'Not specified',
-      employee_id: teacher.employee_id || `TCH-${teacher.id}`,
-      phone: teacher.phone || 'Not provided',
-      address: teacher.address || 'Not provided',
-      is_active: teacher.is_active !== false,
-      joined_at: teacher.created_at
-    }));
-    
-    res.json({
-      success: true,
-      teachers: formattedTeachers
-    });
-  } catch (err) {
-    console.error('Error fetching teachers:', err);
-    res.json({
-      success: true,
-      teachers: [],
-      message: 'No teachers found'
+      message: 'Database error: ' + err.message
     });
   }
 });
@@ -1320,7 +1024,7 @@ app.delete('/api/admin/classes/:classId', authenticateToken, authenticateAdmin, 
   }
 });
 
-// Get all learners (admin view)
+// Get all learners
 app.get('/api/admin/learners', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
     const { data: learners, error } = await supabase
@@ -1344,19 +1048,13 @@ app.get('/api/admin/learners', authenticateToken, authenticateAdmin, async (req,
   }
 });
 
-// ============================================
-// REGISTER LEARNER - SINGLE CLEAN ENDPOINT
-// ============================================
-
-// Register a new learner (Admin) - FIXED for UUID class_id
+// Register a new learner
 app.post('/api/admin/learners', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
     const { name, reg_number, class_id, form, enrollment_date } = req.body;
     
     console.log('📝 Admin registering learner:', { name, reg_number, class_id, form, enrollment_date });
-    console.log('Class ID type:', typeof class_id, 'Value:', class_id);
     
-    // Validate required fields
     if (!name || !reg_number || !class_id) {
       return res.status(400).json({
         success: false,
@@ -1378,62 +1076,41 @@ app.post('/api/admin/learners', authenticateToken, authenticateAdmin, async (req
       });
     }
     
-    // Check if class exists - handle both integer and UUID
-    let classQuery;
-    if (typeof class_id === 'string' && class_id.includes('-')) {
-      // It's a UUID
-      classQuery = supabase
-        .from('classes')
-        .select('id, name')
-        .eq('id', class_id)
-        .maybeSingle();
-    } else {
-      // It's an integer, find the class by converting to text
-      classQuery = supabase
-        .from('classes')
-        .select('id, name')
-        .eq('id', String(class_id))
-        .maybeSingle();
-    }
-    
-    const { data: classExists, error: classError } = await classQuery;
+    // Find the class by UUID
+    const { data: classExists, error: classError } = await supabase
+      .from('classes')
+      .select('id, name')
+      .eq('id', class_id)
+      .maybeSingle();
     
     if (classError || !classExists) {
-      console.error('Class check error:', classError);
       return res.status(404).json({
         success: false,
-        message: 'Class not found. Please select a valid class.'
+        message: 'Class not found'
       });
     }
     
-    console.log('Found class with ID:', classExists.id);
-    
-    // Insert new learner with class_id as UUID
-    const learnerData = {
-      name: name,
-      reg_number: reg_number,
-      class_id: classExists.id, // Use the UUID from the class
-      form: form || getFormName(classExists.name),
-      status: 'Active',
-      enrollment_date: enrollment_date || new Date().toISOString().split('T')[0],
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString()
-    };
-    
-    console.log('Inserting learner with data:', learnerData);
-    
+    // Insert new learner
     const { data: newLearner, error } = await supabase
       .from('learners')
-      .insert(learnerData)
+      .insert({
+        name: name,
+        reg_number: reg_number,
+        class_id: classExists.id,
+        form: form || getFormName(classExists.name),
+        status: 'Active',
+        enrollment_date: enrollment_date || new Date().toISOString().split('T')[0],
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      })
       .select()
       .single();
     
     if (error) {
-      console.error('Supabase insert error:', error);
+      console.error('Insert error:', error);
       return res.status(500).json({
         success: false,
-        message: 'Database error: ' + error.message,
-        error: error.message
+        message: 'Database error: ' + error.message
       });
     }
     
@@ -1454,13 +1131,12 @@ app.post('/api/admin/learners', authenticateToken, authenticateAdmin, async (req
     console.error('Error registering learner:', err);
     res.status(500).json({
       success: false,
-      message: 'Database error: ' + err.message,
-      error: err.message
+      message: 'Database error: ' + err.message
     });
   }
 });
 
-// Update a learner (Admin)
+// Update a learner
 app.put('/api/admin/learners/:learnerId', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
     const { learnerId } = req.params;
@@ -1512,7 +1188,7 @@ app.put('/api/admin/learners/:learnerId', authenticateToken, authenticateAdmin, 
   }
 });
 
-// Delete a learner (Admin)
+// Delete a learner
 app.delete('/api/admin/learners/:learnerId', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
     const { learnerId } = req.params;
@@ -1629,7 +1305,7 @@ app.delete('/api/admin/audit-logs/clear', authenticateToken, authenticateAdmin, 
 });
 
 // ============================================
-// TEACHER ROUTES (Enhanced)
+// TEACHER ROUTES
 // ============================================
 
 // Get all learners (Teacher view)
@@ -1652,7 +1328,7 @@ app.get('/api/teacher/learners', authenticateToken, async (req, res) => {
   }
 });
 
-// Get learners by class (Teacher view)
+// Get learners by class
 app.get('/api/teacher/learners/:classId', authenticateToken, async (req, res) => {
   try {
     const { classId } = req.params;
@@ -1992,7 +1668,6 @@ app.get('/api/learner/reports', authenticateToken, async (req, res) => {
       .order('created_at', { ascending: false });
     
     if (error) {
-      console.log('No reports table found or error:', error.message);
       return res.json({
         success: true,
         data: [],
@@ -2147,46 +1822,13 @@ app.get('/api/learner/dashboard/stats', authenticateToken, async (req, res) => {
 // DEBUG ENDPOINTS
 // ============================================
 
-// Debug endpoint to check learners table structure
-app.get('/api/debug/learners-table', async (req, res) => {
-  try {
-    const { data: sample, error: sampleError } = await supabase
-      .from('learners')
-      .select('*')
-      .limit(1);
-    
-    if (sampleError) {
-      return res.json({ 
-        success: false, 
-        error: sampleError.message,
-        code: sampleError.code,
-        details: sampleError.details
-      });
-    }
-    
-    let columns = [];
-    if (sample && sample.length > 0) {
-      columns = Object.keys(sample[0]);
-    }
-    
-    res.json({
-      success: true,
-      tableExists: true,
-      columns: columns,
-      hasData: sample && sample.length > 0,
-      sampleData: sample && sample.length > 0 ? sample[0] : null
-    });
-  } catch (error) {
-    res.json({ success: false, error: error.message });
-  }
-});
-
 // Debug endpoint to check learners
 app.get('/api/debug/learners', async (req, res) => {
   try {
     const { data: learners, error } = await supabase
       .from('learners')
-      .select('id, name, reg_number, form, status');
+      .select('id, name, reg_number, form, status')
+      .limit(10);
     
     if (error) throw error;
     
@@ -2208,8 +1850,7 @@ app.use((req, res) => {
   console.log(`❌ Route not found: ${req.method} ${req.path}`);
   res.status(404).json({ 
     success: false, 
-    message: `Route not found: ${req.path}`,
-    tip: "Make sure you're using the correct API endpoint with /api prefix"
+    message: `Route not found: ${req.path}`
   });
 });
 
@@ -2237,19 +1878,20 @@ app.listen(PORT, () => {
   console.log(`✅ Server is running on port ${PORT}`);
   console.log(`📡 API URL: http://localhost:${PORT}/api`);
   console.log(`🏥 Health check: http://localhost:${PORT}/health`);
-  console.log(`🧪 Test endpoint: http://localhost:${PORT}/test`);
   console.log('='.repeat(60));
   
   console.log('\n📋 Admin API Endpoints:');
   console.log('   GET    /api/admin/stats');
   console.log('   GET    /api/admin/teachers');
   console.log('   POST   /api/admin/teachers');
+  console.log('   PUT    /api/admin/teachers/:id');
+  console.log('   DELETE /api/admin/teachers/:id');
   console.log('   GET    /api/admin/classes');
   console.log('   POST   /api/admin/classes');
   console.log('   PUT    /api/admin/classes/:id');
   console.log('   DELETE /api/admin/classes/:id');
   console.log('   GET    /api/admin/learners');
-  console.log('   POST   /api/admin/learners ✅ (UUID Fixed - Single Endpoint)');
+  console.log('   POST   /api/admin/learners');
   console.log('   PUT    /api/admin/learners/:id');
   console.log('   DELETE /api/admin/learners/:id');
   console.log('   GET    /api/admin/audit-logs');
