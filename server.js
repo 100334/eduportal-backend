@@ -855,28 +855,116 @@ app.delete('/api/admin/classes/:classId', authenticateToken, authenticateAdmin, 
 });
 
 // Get all learners (admin view)
-app.get('/api/admin/learners', authenticateToken, authenticateAdmin, async (req, res) => {
+// Register a new learner (Admin) - UPDATED to accept all fields
+app.post('/api/admin/learners', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
-    const { data: learners, error } = await supabase
-      .from('learners')
-      .select('*')
-      .order('name', { ascending: true });
+    const { 
+      name,           // Changed from username to name
+      reg_number, 
+      class_id, 
+      form,           // Add form field
+      enrollment_date // Add enrollment_date field
+    } = req.body;
     
-    if (error) throw error;
+    console.log('📝 Admin registering learner:', { name, reg_number, class_id, form, enrollment_date });
+    
+    // Validate required fields
+    if (!name || !reg_number || !class_id) {
+      return res.status(400).json({
+        success: false,
+        message: 'Name, registration number, and class are required'
+      });
+    }
+    
+    // Check if registration number already exists
+    const { data: existing, error: checkError } = await supabase
+      .from('learners')
+      .select('id')
+      .eq('reg_number', reg_number)
+      .maybeSingle();
+    
+    if (existing) {
+      return res.status(409).json({
+        success: false,
+        message: 'Registration number already exists'
+      });
+    }
+    
+    // Check if class exists
+    const { data: classExists, error: classError } = await supabase
+      .from('classes')
+      .select('id, name')
+      .eq('id', class_id)
+      .maybeSingle();
+    
+    if (!classExists) {
+      return res.status(404).json({
+        success: false,
+        message: 'Class not found'
+      });
+    }
+    
+    // Insert new learner with all fields
+    const { data: newLearner, error } = await supabase
+      .from('learners')
+      .insert({
+        name: name,
+        reg_number: reg_number,
+        class_id: class_id,
+        form: form || getFormName(classExists.name), // Use provided form or derive from class name
+        status: 'Active',
+        enrollment_date: enrollment_date || new Date().toISOString().split('T')[0],
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      })
+      .select()
+      .single();
+    
+    if (error) {
+      console.error('Supabase insert error:', error);
+      throw error;
+    }
+    
+    await logAdminAction(
+      req.user.id,
+      'REGISTER_LEARNER',
+      `Registered learner: ${name} (${reg_number}) in class ${classExists.name}`,
+      req.ip
+    );
     
     res.json({
       success: true,
-      learners: learners || []
+      message: 'Learner registered successfully',
+      learner: newLearner
     });
+    
   } catch (err) {
-    console.error('Error fetching learners:', err);
+    console.error('Error registering learner:', err);
     res.status(500).json({
       success: false,
-      message: 'Database error',
+      message: 'Database error: ' + err.message,
       error: err.message
     });
   }
 });
+
+// Helper function to get form name from class name
+function getFormName(className) {
+  if (!className) return 'Form 1';
+  const match = className.match(/Form\s*(\d+)/i);
+  if (match) {
+    const formNumber = match[1];
+    return `Form ${formNumber}`;
+  }
+  
+  // Extract number from class name like "1A", "2B", etc.
+  const numMatch = className.match(/^(\d+)/);
+  if (numMatch) {
+    return `Form ${numMatch[1]}`;
+  }
+  
+  return 'Form 1';
+}
 
 // Register a new learner (Admin)
 app.post('/api/admin/learners', authenticateToken, authenticateAdmin, async (req, res) => {
