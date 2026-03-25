@@ -1920,12 +1920,10 @@ app.delete('/api/teacher/learners/:id', authenticateToken, async (req, res) => {
 });
 
 // Get teacher reports (Filtered by teacher's class)
-// Get teacher reports (Filtered by teacher's class) - FIXED
 app.get('/api/teacher/reports', authenticateToken, async (req, res) => {
   try {
     console.log('📋 Fetching reports for teacher:', req.user.id);
     
-    // Get teacher's class ID
     const { data: teacher, error: teacherError } = await supabase
       .from('users')
       .select('class_id')
@@ -2126,20 +2124,24 @@ app.delete('/api/teacher/reports/:reportId', authenticateToken, async (req, res)
   }
 });
 
-// Get teacher attendance records (Filtered by teacher's class)
+// ============================================
+// ATTENDANCE ROUTES - FIXED
+// ============================================
+
+// Get teacher attendance records
 app.get('/api/teacher/attendance', authenticateToken, async (req, res) => {
   try {
     console.log('📅 Fetching attendance records for teacher:', req.user.id);
     
+    // Get teacher's class ID
     const { data: teacher, error: teacherError } = await supabase
       .from('users')
       .select('class_id')
       .eq('id', req.user.id)
       .maybeSingle();
     
-    if (teacherError) throw teacherError;
-    
-    if (!teacher?.class_id) {
+    if (teacherError) {
+      console.error('Teacher error:', teacherError);
       return res.json({
         success: true,
         data: {
@@ -2149,12 +2151,33 @@ app.get('/api/teacher/attendance', authenticateToken, async (req, res) => {
       });
     }
     
+    if (!teacher?.class_id) {
+      console.log('Teacher has no class assigned');
+      return res.json({
+        success: true,
+        data: {
+          stats: { total: 0, present: 0, absent: 0, late: 0, rate: 0 },
+          records: []
+        }
+      });
+    }
+    
+    // Get learners in teacher's class
     const { data: learners, error: learnersError } = await supabase
       .from('learners')
       .select('id, name, reg_number')
       .eq('class_id', teacher.class_id);
     
-    if (learnersError) throw learnersError;
+    if (learnersError) {
+      console.error('Learners error:', learnersError);
+      return res.json({
+        success: true,
+        data: {
+          stats: { total: 0, present: 0, absent: 0, late: 0, rate: 0 },
+          records: []
+        }
+      });
+    }
     
     const learnerIds = learners?.map(l => l.id) || [];
     
@@ -2162,17 +2185,22 @@ app.get('/api/teacher/attendance', authenticateToken, async (req, res) => {
     let stats = { total: 0, present: 0, absent: 0, late: 0, rate: 0 };
     
     if (learnerIds.length > 0) {
+      // Fetch attendance records for these learners
       const { data: attendance, error: attendanceError } = await supabase
         .from('attendance')
-        .select(`
-          *,
-          learner:learner_id(id, name, reg_number)
-        `)
+        .select('*')
         .in('learner_id', learnerIds)
         .order('date', { ascending: false });
       
-      if (!attendanceError) {
-        attendanceData = attendance || [];
+      if (!attendanceError && attendance) {
+        attendanceData = attendance;
+        
+        // Create a map for quick learner name lookup
+        const learnerMap = {};
+        learners.forEach(l => {
+          learnerMap[l.id] = { name: l.name, reg_number: l.reg_number };
+        });
+        
         stats = {
           total: attendanceData.length,
           present: attendanceData.filter(a => a.status === 'present').length,
@@ -2182,26 +2210,27 @@ app.get('/api/teacher/attendance', authenticateToken, async (req, res) => {
             ? Math.round((attendanceData.filter(a => a.status === 'present' || a.status === 'late').length / attendanceData.length) * 100)
             : 0
         };
+        
+        // Format records with learner names
+        attendanceData = attendanceData.map(record => ({
+          id: record.id,
+          learner_id: record.learner_id,
+          learner_name: learnerMap[record.learner_id]?.name || 'Unknown',
+          learner_reg: learnerMap[record.learner_id]?.reg_number || 'N/A',
+          date: record.date,
+          status: record.status,
+          term: record.term,
+          year: record.year,
+          recorded_at: record.recorded_at
+        }));
       }
     }
-    
-    const formattedRecords = attendanceData.map(record => ({
-      id: record.id,
-      learner_id: record.learner_id,
-      learner_name: record.learner?.name || 'Unknown',
-      learner_reg: record.learner?.reg_number || 'N/A',
-      date: record.date,
-      status: record.status,
-      term: record.term,
-      year: record.year,
-      recorded_at: record.recorded_at
-    }));
     
     res.json({
       success: true,
       data: {
         stats,
-        records: formattedRecords
+        records: attendanceData
       }
     });
     
@@ -2214,37 +2243,64 @@ app.get('/api/teacher/attendance', authenticateToken, async (req, res) => {
   }
 });
 
-// Record attendance
+// Record attendance - FIXED
 app.post('/api/teacher/attendance', authenticateToken, async (req, res) => {
   try {
     const { learnerId, date, status, term, year } = req.body;
     
+    console.log('📝 Recording attendance:', { learnerId, date, status, term, year });
+    
     if (!learnerId || !date || !status) {
       return res.status(400).json({ 
         success: false,
-        error: 'Missing required fields' 
+        message: 'Missing required fields: learnerId, date, and status are required'
       });
     }
     
+    // Verify learner exists
+    const { data: learner, error: learnerError } = await supabase
+      .from('learners')
+      .select('id, name, class_id')
+      .eq('id', learnerId)
+      .maybeSingle();
+    
+    if (learnerError || !learner) {
+      console.error('Learner not found:', learnerId);
+      return res.status(404).json({
+        success: false,
+        message: 'Learner not found'
+      });
+    }
+    
+    // Delete existing record for the same day if exists
     await supabase
       .from('attendance')
       .delete()
       .eq('learner_id', learnerId)
       .eq('date', date);
     
+    // Insert new attendance record
     const { data, error } = await supabase
       .from('attendance')
       .insert([{ 
         learner_id: learnerId, 
-        date, 
-        status,
+        date: date,
+        status: status,
         term: term || 1,
         year: year || new Date().getFullYear(),
         recorded_at: new Date().toISOString() 
       }])
       .select();
     
-    if (error) throw error;
+    if (error) {
+      console.error('Supabase insert error:', error);
+      return res.status(500).json({ 
+        success: false,
+        message: 'Database error: ' + error.message
+      });
+    }
+    
+    console.log('✅ Attendance recorded successfully');
     
     res.json({ 
       success: true, 
@@ -2255,7 +2311,7 @@ app.post('/api/teacher/attendance', authenticateToken, async (req, res) => {
     console.error('Error recording attendance:', error);
     res.status(500).json({ 
       success: false,
-      error: error.message 
+      message: 'Server error: ' + error.message
     });
   }
 });
@@ -2696,8 +2752,8 @@ app.listen(PORT, () => {
   console.log('   GET    /api/teacher/reports ✅ (Class-filtered)');
   console.log('   POST   /api/teacher/reports');
   console.log('   DELETE /api/teacher/reports/:id');
-  console.log('   GET    /api/teacher/attendance ✅ (Class-filtered)');
-  console.log('   POST   /api/teacher/attendance');
+  console.log('   GET    /api/teacher/attendance ✅ (FIXED)');
+  console.log('   POST   /api/teacher/attendance ✅ (FIXED)');
   console.log('   GET    /api/teacher/attendance/date/:date');
   console.log('   GET    /api/teacher/attendance/summary/:classId');
   console.log('   GET    /api/teacher/subjects/:classId');
