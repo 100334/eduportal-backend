@@ -1585,7 +1585,170 @@ app.get('/api/teacher/dashboard/stats', authenticateToken, async (req, res) => {
   }
 });
 
-// Get all learners (Teacher view)
+// ============================================
+// TEACHER LEARNER MANAGEMENT ENDPOINTS (NEW)
+// ============================================
+
+// Get all learners (for teacher to select from)
+app.get('/api/teacher/all-learners', authenticateToken, async (req, res) => {
+  try {
+    console.log('📚 Fetching all learners for teacher');
+    
+    const { data: learners, error } = await supabase
+      .from('learners')
+      .select('id, name, reg_number, form, status, class_id')
+      .eq('status', 'Active')
+      .order('name', { ascending: true });
+    
+    if (error) throw error;
+    
+    res.json({
+      success: true,
+      learners: learners || []
+    });
+    
+  } catch (err) {
+    console.error('Error fetching all learners:', err);
+    res.status(500).json({
+      success: false,
+      message: 'Database error',
+      error: err.message
+    });
+  }
+});
+
+// Get learners assigned to this teacher
+app.get('/api/teacher/my-learners', authenticateToken, async (req, res) => {
+  try {
+    console.log('👥 Fetching learners assigned to teacher:', req.user.id);
+    
+    // Get teacher's class ID
+    const { data: teacher, error: teacherError } = await supabase
+      .from('users')
+      .select('class_id')
+      .eq('id', req.user.id)
+      .maybeSingle();
+    
+    if (teacherError) throw teacherError;
+    
+    if (!teacher?.class_id) {
+      // Teacher has no class assigned yet
+      return res.json({
+        success: true,
+        learners: []
+      });
+    }
+    
+    // Get learners in teacher's class
+    const { data: learners, error } = await supabase
+      .from('learners')
+      .select('id, name, reg_number, form, status, class_id')
+      .eq('class_id', teacher.class_id)
+      .eq('status', 'Active')
+      .order('name', { ascending: true });
+    
+    if (error) throw error;
+    
+    res.json({
+      success: true,
+      learners: learners || []
+    });
+    
+  } catch (err) {
+    console.error('Error fetching my learners:', err);
+    res.status(500).json({
+      success: false,
+      message: 'Database error',
+      error: err.message
+    });
+  }
+});
+
+// Add learners to teacher's class
+app.post('/api/teacher/add-learners', authenticateToken, async (req, res) => {
+  try {
+    const { learnerIds } = req.body;
+    
+    console.log('📝 Adding learners to teacher class:', { learnerIds });
+    
+    if (!learnerIds || !Array.isArray(learnerIds) || learnerIds.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please select at least one learner'
+      });
+    }
+    
+    // Get teacher's class ID
+    const { data: teacher, error: teacherError } = await supabase
+      .from('users')
+      .select('class_id')
+      .eq('id', req.user.id)
+      .maybeSingle();
+    
+    if (teacherError) throw teacherError;
+    
+    if (!teacher?.class_id) {
+      return res.status(400).json({
+        success: false,
+        message: 'You have not been assigned to a class yet. Please contact administrator.'
+      });
+    }
+    
+    // Update learners' class_id to teacher's class
+    const { data, error } = await supabase
+      .from('learners')
+      .update({ class_id: teacher.class_id, updated_at: new Date().toISOString() })
+      .in('id', learnerIds)
+      .select();
+    
+    if (error) throw error;
+    
+    res.json({
+      success: true,
+      message: `${learnerIds.length} learner(s) added to your class`,
+      learners: data
+    });
+    
+  } catch (err) {
+    console.error('Error adding learners:', err);
+    res.status(500).json({
+      success: false,
+      message: 'Database error: ' + err.message
+    });
+  }
+});
+
+// Remove learner from teacher's class
+app.delete('/api/teacher/remove-learner/:learnerId', authenticateToken, async (req, res) => {
+  try {
+    const { learnerId } = req.params;
+    
+    console.log('🗑️ Removing learner from teacher class:', learnerId);
+    
+    // Remove class_id from learner (set to null)
+    const { data, error } = await supabase
+      .from('learners')
+      .update({ class_id: null, updated_at: new Date().toISOString() })
+      .eq('id', learnerId)
+      .select();
+    
+    if (error) throw error;
+    
+    res.json({
+      success: true,
+      message: 'Learner removed from your class'
+    });
+    
+  } catch (err) {
+    console.error('Error removing learner:', err);
+    res.status(500).json({
+      success: false,
+      message: 'Database error: ' + err.message
+    });
+  }
+});
+
+// Get all learners (Teacher view) - Keep existing for backward compatibility
 app.get('/api/teacher/learners', authenticateToken, async (req, res) => {
   try {
     const { data, error } = await supabase
@@ -1628,7 +1791,7 @@ app.get('/api/teacher/learners/:classId', authenticateToken, async (req, res) =>
   }
 });
 
-// Add learner (Teacher)
+// Add learner (Teacher) - Deprecated but kept for compatibility
 app.post('/api/teacher/learners', authenticateToken, async (req, res) => {
   try {
     const { name, form, status } = req.body;
@@ -2341,6 +2504,10 @@ app.listen(PORT, () => {
   
   console.log('\n📋 Teacher API Endpoints:');
   console.log('   GET    /api/teacher/dashboard/stats');
+  console.log('   GET    /api/teacher/all-learners ✅ (NEW)');
+  console.log('   GET    /api/teacher/my-learners ✅ (NEW)');
+  console.log('   POST   /api/teacher/add-learners ✅ (NEW)');
+  console.log('   DELETE /api/teacher/remove-learner/:id ✅ (NEW)');
   console.log('   GET    /api/teacher/learners');
   console.log('   GET    /api/teacher/learners/:classId');
   console.log('   POST   /api/teacher/learners');
