@@ -1920,10 +1920,12 @@ app.delete('/api/teacher/learners/:id', authenticateToken, async (req, res) => {
 });
 
 // Get teacher reports (Filtered by teacher's class)
+// Get teacher reports (Filtered by teacher's class) - FIXED
 app.get('/api/teacher/reports', authenticateToken, async (req, res) => {
   try {
     console.log('📋 Fetching reports for teacher:', req.user.id);
     
+    // Get teacher's class ID
     const { data: teacher, error: teacherError } = await supabase
       .from('users')
       .select('class_id')
@@ -1939,17 +1941,56 @@ app.get('/api/teacher/reports', authenticateToken, async (req, res) => {
       });
     }
     
+    // Get reports for learners in teacher's class
     const { data: reports, error } = await supabase
       .from('reports')
       .select(`
         *,
-        learner:learner_id(id, name, reg_number),
-        class:class_id(id, name, year)
+        learner:learner_id(id, name, reg_number)
       `)
       .eq('class_id', teacher.class_id)
       .order('created_at', { ascending: false });
     
-    if (error) throw error;
+    if (error) {
+      console.error('Reports query error:', error);
+      // If class_id column doesn't exist, try alternative query
+      const { data: learners, error: learnersError } = await supabase
+        .from('learners')
+        .select('id')
+        .eq('class_id', teacher.class_id);
+      
+      if (learnersError) throw learnersError;
+      
+      const learnerIds = learners?.map(l => l.id) || [];
+      
+      const { data: altReports, error: altError } = await supabase
+        .from('reports')
+        .select(`
+          *,
+          learner:learner_id(id, name, reg_number)
+        `)
+        .in('learner_id', learnerIds)
+        .order('created_at', { ascending: false });
+      
+      if (altError) throw altError;
+      
+      const formattedAltReports = (altReports || []).map(report => ({
+        id: report.id,
+        learner_id: report.learner_id,
+        learner_name: report.learner?.name || 'Unknown',
+        learner_reg: report.learner?.reg_number || 'N/A',
+        term: report.term,
+        form: report.form,
+        subjects: report.subjects || [],
+        comment: report.comment,
+        created_at: report.created_at
+      }));
+      
+      return res.json({
+        success: true,
+        data: formattedAltReports
+      });
+    }
     
     const formattedReports = (reports || []).map(report => ({
       id: report.id,
