@@ -2325,12 +2325,14 @@ app.get('/api/teacher/attendance', authenticateToken, async (req, res) => {
 });
 
 // Record attendance - FIXED
+// Record attendance - FIXED VERSION
 app.post('/api/teacher/attendance', authenticateToken, async (req, res) => {
   try {
     const { learnerId, date, status, term, year } = req.body;
     
-    console.log('📝 Recording attendance:', { learnerId, date, status, term, year });
+    console.log('📝 Attendance request:', { learnerId, date, status, term, year });
     
+    // Validate input
     if (!learnerId || !date || !status) {
       return res.status(400).json({ 
         success: false,
@@ -2338,58 +2340,114 @@ app.post('/api/teacher/attendance', authenticateToken, async (req, res) => {
       });
     }
     
-    // Verify learner exists
+    // Validate status
+    if (!['present', 'absent', 'late'].includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid status. Must be present, absent, or late'
+      });
+    }
+    
+    // First, check if the learner exists
     const { data: learner, error: learnerError } = await supabase
       .from('learners')
-      .select('id, name, class_id')
+      .select('id, name')
       .eq('id', learnerId)
       .maybeSingle();
     
-    if (learnerError || !learner) {
-      console.error('Learner not found:', learnerId);
-      return res.status(404).json({
-        success: false,
-        message: 'Learner not found'
-      });
-    }
-    
-    // Delete existing record for the same day if exists
-    await supabase
-      .from('attendance')
-      .delete()
-      .eq('learner_id', learnerId)
-      .eq('date', date);
-    
-    // Insert new attendance record
-    const { data, error } = await supabase
-      .from('attendance')
-      .insert([{ 
-        learner_id: learnerId, 
-        date: date,
-        status: status,
-        term: term || 1,
-        year: year || new Date().getFullYear(),
-        recorded_at: new Date().toISOString() 
-      }])
-      .select();
-    
-    if (error) {
-      console.error('Supabase insert error:', error);
+    if (learnerError) {
+      console.error('Learner query error:', learnerError);
       return res.status(500).json({ 
         success: false,
-        message: 'Database error: ' + error.message
+        message: 'Database error while checking learner',
+        error: learnerError.message
       });
     }
     
-    console.log('✅ Attendance recorded successfully');
+    if (!learner) {
+      return res.status(404).json({
+        success: false,
+        message: `Learner with ID ${learnerId} not found`
+      });
+    }
+    
+    console.log('✅ Found learner:', learner);
+    
+    // Check if attendance record already exists for this date
+    const { data: existing, error: existingError } = await supabase
+      .from('attendance')
+      .select('id')
+      .eq('learner_id', learnerId)
+      .eq('date', date)
+      .maybeSingle();
+    
+    if (existingError) {
+      console.error('Existing check error:', existingError);
+      // Continue - we'll try to insert/update anyway
+    }
+    
+    let result;
+    
+    if (existing) {
+      // Update existing record
+      console.log('Updating existing attendance record');
+      const { data, error } = await supabase
+        .from('attendance')
+        .update({
+          status: status,
+          term: term || 1,
+          year: year || new Date().getFullYear(),
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', existing.id)
+        .select();
+      
+      if (error) {
+        console.error('Update error:', error);
+        return res.status(500).json({
+          success: false,
+          message: 'Failed to update attendance: ' + error.message
+        });
+      }
+      
+      result = data;
+    } else {
+      // Insert new record
+      console.log('Creating new attendance record');
+      const { data, error } = await supabase
+        .from('attendance')
+        .insert({
+          learner_id: learnerId,
+          date: date,
+          status: status,
+          term: term || 1,
+          year: year || new Date().getFullYear(),
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        })
+        .select();
+      
+      if (error) {
+        console.error('Insert error:', error);
+        return res.status(500).json({
+          success: false,
+          message: 'Failed to record attendance: ' + error.message
+        });
+      }
+      
+      result = data;
+    }
+    
+    console.log('✅ Attendance recorded successfully:', result);
     
     res.json({ 
       success: true, 
       message: 'Attendance recorded successfully',
-      attendance: data[0] 
+      attendance: result[0] 
     });
+    
   } catch (error) {
-    console.error('Error recording attendance:', error);
+    console.error('❌ Attendance error:', error);
     res.status(500).json({ 
       success: false,
       message: 'Server error: ' + error.message
