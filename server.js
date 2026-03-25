@@ -1538,37 +1538,66 @@ app.delete('/api/admin/subjects/:subjectId', authenticateToken, authenticateAdmi
 });
 
 // ============================================
-// TEACHER ROUTES - ENHANCED
+// TEACHER ROUTES - ENHANCED (Filtered by Teacher's Class)
 // ============================================
 
-// Get teacher dashboard stats
+// Get teacher dashboard stats (Filtered by teacher's class)
 app.get('/api/teacher/dashboard/stats', authenticateToken, async (req, res) => {
   try {
-    console.log('📊 Fetching teacher dashboard stats');
+    console.log('📊 Fetching teacher dashboard stats for user:', req.user.id);
     
-    const { count: totalLearners, error: learnersError } = await supabase
-      .from('learners')
-      .select('*', { count: 'exact', head: true });
+    // Get teacher's class ID
+    const { data: teacher, error: teacherError } = await supabase
+      .from('users')
+      .select('class_id')
+      .eq('id', req.user.id)
+      .maybeSingle();
     
-    const { count: totalReports, error: reportsError } = await supabase
-      .from('reports')
-      .select('*', { count: 'exact', head: true });
+    if (teacherError) throw teacherError;
     
-    const today = new Date().toISOString().split('T')[0];
-    const { data: todayAttendance, error: attendanceError } = await supabase
-      .from('attendance')
-      .select('status')
-      .eq('date', today);
+    let totalLearners = 0;
+    let totalReports = 0;
+    let attendanceRate = 0;
+    let presentToday = 0;
+    let totalToday = 0;
     
-    const presentToday = todayAttendance?.filter(a => a.status === 'present').length || 0;
-    const totalToday = todayAttendance?.length || 0;
-    const attendanceRate = totalToday > 0 ? Math.round((presentToday / totalToday) * 100) : 0;
+    if (teacher?.class_id) {
+      // Get learners in teacher's class
+      const { count: learnersCount, error: learnersError } = await supabase
+        .from('learners')
+        .select('*', { count: 'exact', head: true })
+        .eq('class_id', teacher.class_id)
+        .eq('status', 'Active');
+      
+      if (!learnersError) totalLearners = learnersCount || 0;
+      
+      // Get reports for learners in teacher's class
+      const { count: reportsCount, error: reportsError } = await supabase
+        .from('reports')
+        .select('*', { count: 'exact', head: true })
+        .eq('class_id', teacher.class_id);
+      
+      if (!reportsError) totalReports = reportsCount || 0;
+      
+      // Get today's attendance for the class
+      const today = new Date().toISOString().split('T')[0];
+      const { data: todayAttendance, error: attendanceError } = await supabase
+        .from('attendance')
+        .select('status, learner_id')
+        .eq('date', today);
+      
+      if (!attendanceError && todayAttendance && todayAttendance.length > 0) {
+        totalToday = todayAttendance.length;
+        presentToday = todayAttendance.filter(a => a.status === 'present').length;
+        attendanceRate = totalToday > 0 ? Math.round((presentToday / totalToday) * 100) : 0;
+      }
+    }
     
     res.json({
       success: true,
       data: {
-        totalLearners: totalLearners || 0,
-        totalReports: totalReports || 0,
+        totalLearners: totalLearners,
+        totalReports: totalReports,
         attendanceRate: attendanceRate,
         presentToday: presentToday,
         totalToday: totalToday
@@ -1579,15 +1608,10 @@ app.get('/api/teacher/dashboard/stats', authenticateToken, async (req, res) => {
     console.error('Error fetching teacher stats:', err);
     res.status(500).json({
       success: false,
-      message: 'Database error',
-      error: err.message
+      message: 'Database error: ' + err.message
     });
   }
 });
-
-// ============================================
-// TEACHER LEARNER MANAGEMENT ENDPOINTS (NEW)
-// ============================================
 
 // Get all learners (for teacher to select from)
 app.get('/api/teacher/all-learners', authenticateToken, async (req, res) => {
@@ -1611,8 +1635,7 @@ app.get('/api/teacher/all-learners', authenticateToken, async (req, res) => {
     console.error('Error fetching all learners:', err);
     res.status(500).json({
       success: false,
-      message: 'Database error',
-      error: err.message
+      message: 'Database error: ' + err.message
     });
   }
 });
@@ -1622,7 +1645,6 @@ app.get('/api/teacher/my-learners', authenticateToken, async (req, res) => {
   try {
     console.log('👥 Fetching learners assigned to teacher:', req.user.id);
     
-    // Get teacher's class ID
     const { data: teacher, error: teacherError } = await supabase
       .from('users')
       .select('class_id')
@@ -1632,14 +1654,12 @@ app.get('/api/teacher/my-learners', authenticateToken, async (req, res) => {
     if (teacherError) throw teacherError;
     
     if (!teacher?.class_id) {
-      // Teacher has no class assigned yet
       return res.json({
         success: true,
         learners: []
       });
     }
     
-    // Get learners in teacher's class
     const { data: learners, error } = await supabase
       .from('learners')
       .select('id, name, reg_number, form, status, class_id')
@@ -1658,8 +1678,7 @@ app.get('/api/teacher/my-learners', authenticateToken, async (req, res) => {
     console.error('Error fetching my learners:', err);
     res.status(500).json({
       success: false,
-      message: 'Database error',
-      error: err.message
+      message: 'Database error: ' + err.message
     });
   }
 });
@@ -1678,7 +1697,6 @@ app.post('/api/teacher/add-learners', authenticateToken, async (req, res) => {
       });
     }
     
-    // Get teacher's class ID
     const { data: teacher, error: teacherError } = await supabase
       .from('users')
       .select('class_id')
@@ -1694,7 +1712,6 @@ app.post('/api/teacher/add-learners', authenticateToken, async (req, res) => {
       });
     }
     
-    // Update learners' class_id to teacher's class
     const { data, error } = await supabase
       .from('learners')
       .update({ class_id: teacher.class_id, updated_at: new Date().toISOString() })
@@ -1725,7 +1742,6 @@ app.delete('/api/teacher/remove-learner/:learnerId', authenticateToken, async (r
     
     console.log('🗑️ Removing learner from teacher class:', learnerId);
     
-    // Remove class_id from learner (set to null)
     const { data, error } = await supabase
       .from('learners')
       .update({ class_id: null, updated_at: new Date().toISOString() })
@@ -1748,7 +1764,7 @@ app.delete('/api/teacher/remove-learner/:learnerId', authenticateToken, async (r
   }
 });
 
-// Get all learners (Teacher view) - Keep existing for backward compatibility
+// Get all learners (Teacher view)
 app.get('/api/teacher/learners', authenticateToken, async (req, res) => {
   try {
     const { data, error } = await supabase
@@ -1803,7 +1819,6 @@ app.post('/api/teacher/learners', authenticateToken, async (req, res) => {
       });
     }
     
-    // Generate registration number
     const year = new Date().getFullYear();
     const randomNum = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
     const regNumber = `EDU-${year}-${randomNum}`;
@@ -1904,10 +1919,25 @@ app.delete('/api/teacher/learners/:id', authenticateToken, async (req, res) => {
   }
 });
 
-// Get teacher reports
+// Get teacher reports (Filtered by teacher's class)
 app.get('/api/teacher/reports', authenticateToken, async (req, res) => {
   try {
-    console.log('📋 Fetching reports for teacher');
+    console.log('📋 Fetching reports for teacher:', req.user.id);
+    
+    const { data: teacher, error: teacherError } = await supabase
+      .from('users')
+      .select('class_id')
+      .eq('id', req.user.id)
+      .maybeSingle();
+    
+    if (teacherError) throw teacherError;
+    
+    if (!teacher?.class_id) {
+      return res.json({
+        success: true,
+        data: []
+      });
+    }
     
     const { data: reports, error } = await supabase
       .from('reports')
@@ -1916,6 +1946,7 @@ app.get('/api/teacher/reports', authenticateToken, async (req, res) => {
         learner:learner_id(id, name, reg_number),
         class:class_id(id, name, year)
       `)
+      .eq('class_id', teacher.class_id)
       .order('created_at', { ascending: false });
     
     if (error) throw error;
@@ -1942,8 +1973,7 @@ app.get('/api/teacher/reports', authenticateToken, async (req, res) => {
     console.error('Error fetching teacher reports:', err);
     res.status(500).json({
       success: false,
-      message: 'Database error',
-      error: err.message
+      message: 'Database error: ' + err.message
     });
   }
 });
@@ -2055,32 +2085,66 @@ app.delete('/api/teacher/reports/:reportId', authenticateToken, async (req, res)
   }
 });
 
-// Get teacher attendance records
+// Get teacher attendance records (Filtered by teacher's class)
 app.get('/api/teacher/attendance', authenticateToken, async (req, res) => {
   try {
-    console.log('📅 Fetching attendance records for teacher');
+    console.log('📅 Fetching attendance records for teacher:', req.user.id);
     
-    const { data: attendance, error } = await supabase
-      .from('attendance')
-      .select(`
-        *,
-        learner:learner_id(id, name, reg_number)
-      `)
-      .order('date', { ascending: false });
+    const { data: teacher, error: teacherError } = await supabase
+      .from('users')
+      .select('class_id')
+      .eq('id', req.user.id)
+      .maybeSingle();
     
-    if (error) throw error;
+    if (teacherError) throw teacherError;
     
-    const stats = {
-      total: attendance?.length || 0,
-      present: attendance?.filter(a => a.status === 'present').length || 0,
-      absent: attendance?.filter(a => a.status === 'absent').length || 0,
-      late: attendance?.filter(a => a.status === 'late').length || 0,
-      rate: attendance?.length > 0 
-        ? Math.round((attendance?.filter(a => a.status === 'present' || a.status === 'late').length / attendance.length) * 100)
-        : 0
-    };
+    if (!teacher?.class_id) {
+      return res.json({
+        success: true,
+        data: {
+          stats: { total: 0, present: 0, absent: 0, late: 0, rate: 0 },
+          records: []
+        }
+      });
+    }
     
-    const formattedRecords = (attendance || []).map(record => ({
+    const { data: learners, error: learnersError } = await supabase
+      .from('learners')
+      .select('id, name, reg_number')
+      .eq('class_id', teacher.class_id);
+    
+    if (learnersError) throw learnersError;
+    
+    const learnerIds = learners?.map(l => l.id) || [];
+    
+    let attendanceData = [];
+    let stats = { total: 0, present: 0, absent: 0, late: 0, rate: 0 };
+    
+    if (learnerIds.length > 0) {
+      const { data: attendance, error: attendanceError } = await supabase
+        .from('attendance')
+        .select(`
+          *,
+          learner:learner_id(id, name, reg_number)
+        `)
+        .in('learner_id', learnerIds)
+        .order('date', { ascending: false });
+      
+      if (!attendanceError) {
+        attendanceData = attendance || [];
+        stats = {
+          total: attendanceData.length,
+          present: attendanceData.filter(a => a.status === 'present').length,
+          absent: attendanceData.filter(a => a.status === 'absent').length,
+          late: attendanceData.filter(a => a.status === 'late').length,
+          rate: attendanceData.length > 0 
+            ? Math.round((attendanceData.filter(a => a.status === 'present' || a.status === 'late').length / attendanceData.length) * 100)
+            : 0
+        };
+      }
+    }
+    
+    const formattedRecords = attendanceData.map(record => ({
       id: record.id,
       learner_id: record.learner_id,
       learner_name: record.learner?.name || 'Unknown',
@@ -2104,8 +2168,7 @@ app.get('/api/teacher/attendance', authenticateToken, async (req, res) => {
     console.error('Error fetching teacher attendance:', err);
     res.status(500).json({
       success: false,
-      message: 'Database error',
-      error: err.message
+      message: 'Database error: ' + err.message
     });
   }
 });
@@ -2122,7 +2185,6 @@ app.post('/api/teacher/attendance', authenticateToken, async (req, res) => {
       });
     }
     
-    // Delete existing record for the same day if exists
     await supabase
       .from('attendance')
       .delete()
@@ -2503,7 +2565,7 @@ app.listen(PORT, () => {
   console.log('   DELETE /api/admin/subjects/:id');
   
   console.log('\n📋 Teacher API Endpoints:');
-  console.log('   GET    /api/teacher/dashboard/stats');
+  console.log('   GET    /api/teacher/dashboard/stats ✅ (Class-filtered)');
   console.log('   GET    /api/teacher/all-learners ✅ (NEW)');
   console.log('   GET    /api/teacher/my-learners ✅ (NEW)');
   console.log('   POST   /api/teacher/add-learners ✅ (NEW)');
@@ -2513,10 +2575,10 @@ app.listen(PORT, () => {
   console.log('   POST   /api/teacher/learners');
   console.log('   PUT    /api/teacher/learners/:id');
   console.log('   DELETE /api/teacher/learners/:id');
-  console.log('   GET    /api/teacher/reports');
+  console.log('   GET    /api/teacher/reports ✅ (Class-filtered)');
   console.log('   POST   /api/teacher/reports');
   console.log('   DELETE /api/teacher/reports/:id');
-  console.log('   GET    /api/teacher/attendance');
+  console.log('   GET    /api/teacher/attendance ✅ (Class-filtered)');
   console.log('   POST   /api/teacher/attendance');
   console.log('   GET    /api/teacher/attendance/date/:date');
   console.log('   GET    /api/teacher/attendance/summary/:classId');
