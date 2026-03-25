@@ -2482,6 +2482,83 @@ app.get('/api/learner/dashboard/stats', authenticateToken, async (req, res) => {
 });
 
 // ============================================
+// TEACHER DEBUG ENDPOINT
+// ============================================
+
+// Debug endpoint to check teacher setup
+app.get('/api/teacher/debug-setup', authenticateToken, async (req, res) => {
+  try {
+    console.log('🔍 Debugging teacher setup for user:', req.user.id);
+    
+    // Get teacher info
+    const { data: teacher, error: teacherError } = await supabase
+      .from('users')
+      .select('id, email, name, role, class_id')
+      .eq('id', req.user.id)
+      .maybeSingle();
+    
+    if (teacherError) throw teacherError;
+    
+    // Get class info if assigned
+    let classInfo = null;
+    if (teacher?.class_id) {
+      const { data: classData, error: classError } = await supabase
+        .from('classes')
+        .select('*')
+        .eq('id', teacher.class_id)
+        .maybeSingle();
+      if (!classError) classInfo = classData;
+    }
+    
+    // Get all classes (for admin reference)
+    const { data: allClasses, error: classesError } = await supabase
+      .from('classes')
+      .select('id, name, year');
+    
+    // Get all teachers
+    const { data: allTeachers, error: teachersError } = await supabase
+      .from('users')
+      .select('id, email, name, role, class_id')
+      .eq('role', 'teacher');
+    
+    // Get learners in teacher's class if assigned
+    let learnersInClass = [];
+    if (teacher?.class_id) {
+      const { data: learners, error: learnersError } = await supabase
+        .from('learners')
+        .select('id, name, reg_number, form')
+        .eq('class_id', teacher.class_id);
+      if (!learnersError) learnersInClass = learners || [];
+    }
+    
+    res.json({
+      success: true,
+      current_teacher: {
+        id: teacher?.id,
+        email: teacher?.email,
+        name: teacher?.name,
+        class_id: teacher?.class_id,
+        has_class: !!teacher?.class_id,
+        message: teacher?.class_id ? 'Teacher has a class assigned' : 'Teacher has NO class assigned'
+      },
+      assigned_class: classInfo,
+      learners_in_class: learnersInClass,
+      learners_count: learnersInClass.length,
+      all_classes: allClasses || [],
+      all_teachers: allTeachers || [],
+      recommendation: !teacher?.class_id ? 'Run SQL to assign teacher to a class' : null
+    });
+    
+  } catch (err) {
+    console.error('Debug error:', err);
+    res.status(500).json({
+      success: false,
+      error: err.message
+    });
+  }
+});
+
+// ============================================
 // DEBUG ENDPOINTS
 // ============================================
 
@@ -2583,6 +2660,7 @@ app.listen(PORT, () => {
   console.log('   GET    /api/teacher/attendance/date/:date');
   console.log('   GET    /api/teacher/attendance/summary/:classId');
   console.log('   GET    /api/teacher/subjects/:classId');
+  console.log('   GET    /api/teacher/debug-setup ✅ (DEBUG)');
   
   console.log('\n📋 Learner API Endpoints:');
   console.log('   GET    /api/learner/profile');
