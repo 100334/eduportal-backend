@@ -2118,6 +2118,79 @@ app.delete('/api/teacher/reports/:reportId', authenticateToken, async (req, res)
 });
 
 // ============================================
+// NEW: GET LEARNER-SPECIFIC SUBJECTS
+// ============================================
+
+app.get('/api/teacher/learner-subjects/:learnerId', authenticateToken, async (req, res) => {
+  try {
+    const { learnerId } = req.params;
+    
+    console.log('📚 Fetching subjects for learner:', learnerId);
+    
+    // First, get the learner's class
+    const { data: learner, error: learnerError } = await supabase
+      .from('learners')
+      .select('class_id, form')
+      .eq('id', learnerId)
+      .maybeSingle();
+    
+    if (learnerError) {
+      console.error('Error fetching learner:', learnerError);
+      return res.status(500).json({
+        success: false,
+        message: 'Error fetching learner information'
+      });
+    }
+    
+    if (!learner) {
+      return res.status(404).json({
+        success: false,
+        message: 'Learner not found'
+      });
+    }
+    
+    if (!learner.class_id) {
+      console.log('Learner has no class assigned');
+      return res.json({
+        success: true,
+        subjects: [],
+        message: 'Learner has no class assigned'
+      });
+    }
+    
+    // Fetch subjects for the learner's class
+    const { data: subjects, error: subjectsError } = await supabase
+      .from('subjects')
+      .select('id, name, code, description, status')
+      .eq('class_id', learner.class_id)
+      .eq('status', 'Active')
+      .order('display_order', { ascending: true });
+    
+    if (subjectsError) {
+      console.error('Error fetching subjects:', subjectsError);
+      return res.status(500).json({
+        success: false,
+        message: 'Error fetching subjects'
+      });
+    }
+    
+    console.log(`✅ Found ${subjects?.length || 0} subjects for learner ${learnerId}`);
+    
+    res.json({
+      success: true,
+      subjects: subjects || []
+    });
+    
+  } catch (err) {
+    console.error('Error in learner-subjects endpoint:', err);
+    res.status(500).json({
+      success: false,
+      message: 'Server error: ' + err.message
+    });
+  }
+});
+
+// ============================================
 // ATTENDANCE ROUTES - FIXED (No crypto dependency)
 // ============================================
 
@@ -2350,7 +2423,7 @@ app.post('/api/teacher/attendance', authenticateToken, async (req, res) => {
   }
 });
 
-// Get subjects for a class (Teacher view)
+// Get subjects for a class (Teacher view) - Deprecated, use learner-subjects instead
 app.get('/api/teacher/subjects/:classId', authenticateToken, async (req, res) => {
   try {
     const { classId } = req.params;
@@ -2784,6 +2857,7 @@ app.listen(PORT, () => {
   console.log('   GET    /api/teacher/attendance/date/:date');
   console.log('   GET    /api/teacher/attendance/summary/:classId');
   console.log('   GET    /api/teacher/subjects/:classId');
+  console.log('   GET    /api/teacher/learner-subjects/:learnerId ✅ (NEW)');
   console.log('   GET    /api/teacher/debug-setup ✅');
   
   console.log('\n📋 Learner API Endpoints:');
