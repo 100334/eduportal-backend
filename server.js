@@ -2129,6 +2129,87 @@ app.delete('/api/teacher/reports/:reportId', authenticateToken, async (req, res)
 // ============================================
 
 // Get teacher attendance records
+// ============================================
+// ATTENDANCE ROUTES - MATCHING YOUR SCHEMA
+// ============================================
+
+// Record attendance - FIXED for integer learner_id
+app.post('/api/teacher/attendance', authenticateToken, async (req, res) => {
+  try {
+    const { learnerId, date, status, term, year } = req.body;
+    
+    console.log('📝 Recording attendance:', { learnerId, date, status, term, year });
+    
+    if (!learnerId || !date || !status) {
+      return res.status(400).json({ 
+        success: false,
+        message: 'Missing required fields: learnerId, date, and status are required'
+      });
+    }
+    
+    // Verify learner exists - learnerId is INTEGER
+    const { data: learner, error: learnerError } = await supabase
+      .from('learners')
+      .select('id, name, class_id')
+      .eq('id', learnerId)  // This should work if learners.id is integer
+      .maybeSingle();
+    
+    if (learnerError || !learner) {
+      console.error('Learner not found:', learnerId);
+      return res.status(404).json({
+        success: false,
+        message: 'Learner not found'
+      });
+    }
+    
+    // Delete existing record for the same day if exists
+    await supabase
+      .from('attendance')
+      .delete()
+      .eq('learner_id', learnerId)
+      .eq('date', date);
+    
+    // Insert new attendance record - using fields from your INSERT
+    const { data, error } = await supabase
+      .from('attendance')
+      .insert({ 
+        id: crypto.randomUUID ? crypto.randomUUID() : '00000000-0000-0000-0000-000000000000', // Generate UUID
+        learner_id: learnerId,
+        date: date,
+        status: status,
+        term: term || 1,
+        year: year || new Date().getFullYear(),
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      })
+      .select();
+    
+    if (error) {
+      console.error('Supabase insert error:', error);
+      return res.status(500).json({ 
+        success: false,
+        message: 'Database error: ' + error.message,
+        details: error
+      });
+    }
+    
+    console.log('✅ Attendance recorded successfully');
+    
+    res.json({ 
+      success: true, 
+      message: 'Attendance recorded successfully',
+      attendance: data[0] 
+    });
+  } catch (error) {
+    console.error('Error recording attendance:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Server error: ' + error.message
+    });
+  }
+});
+
+// Get teacher attendance records
 app.get('/api/teacher/attendance', authenticateToken, async (req, res) => {
   try {
     console.log('📅 Fetching attendance records for teacher:', req.user.id);
@@ -2219,9 +2300,9 @@ app.get('/api/teacher/attendance', authenticateToken, async (req, res) => {
           learner_reg: learnerMap[record.learner_id]?.reg_number || 'N/A',
           date: record.date,
           status: record.status,
-          term: record.term,
-          year: record.year,
-          recorded_at: record.recorded_at
+          term: record.term || 1,
+          year: record.year || new Date().getFullYear(),
+          recorded_at: record.created_at
         }));
       }
     }
