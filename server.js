@@ -2011,11 +2011,13 @@ app.get('/api/teacher/reports', authenticateToken, async (req, res) => {
 });
 
 // Create a new report (Teacher)
+// Create a new report (Teacher) - FIXED
 app.post('/api/teacher/reports', authenticateToken, async (req, res) => {
   try {
     const { learnerId, term, form, subjects, comment } = req.body;
     
     console.log('📝 Creating new report for learner:', learnerId);
+    console.log('Subjects received:', JSON.stringify(subjects, null, 2));
     
     if (!learnerId || !subjects || subjects.length === 0) {
       return res.status(400).json({
@@ -2024,51 +2026,75 @@ app.post('/api/teacher/reports', authenticateToken, async (req, res) => {
       });
     }
     
+    // Get learner details
     const { data: learner, error: learnerError } = await supabase
       .from('learners')
-      .select('id, name, class_id')
-      .eq('id', learnerId)
+      .select('id, name, class_id, reg_number, form')
+      .eq('id', parseInt(learnerId))
       .maybeSingle();
     
-    if (!learner) {
+    if (learnerError || !learner) {
+      console.error('Learner error:', learnerError);
       return res.status(404).json({
         success: false,
         message: 'Learner not found'
       });
     }
     
+    console.log('Found learner:', learner.name, 'Class ID:', learner.class_id);
+    
+    // Calculate average score
     const totalScore = subjects.reduce((sum, s) => sum + (s.score || 0), 0);
     const averageScore = Math.round(totalScore / subjects.length);
     
+    // Determine grade
     let grade = 'F';
     if (averageScore >= 75) grade = 'A';
     else if (averageScore >= 65) grade = 'B';
     else if (averageScore >= 55) grade = 'C';
     else if (averageScore >= 40) grade = 'D';
-    else grade = 'F';
     
+    // Prepare the subjects array (ensure it's clean)
+    const subjectsData = subjects.map(s => ({
+      name: s.name,
+      score: parseInt(s.score) || 0
+    }));
+    
+    // Insert the report
     const { data: newReport, error } = await supabase
       .from('reports')
       .insert({
-        learner_id: learnerId,
+        learner_id: parseInt(learnerId),
         class_id: learner.class_id,
-        term: term || 'Term 1',
-        form: form || 'Form 1',
-        subjects: subjects,
+        term: term || 'Term 1 – 2026',
+        form: form || learner.form,
+        subjects: subjectsData, // Store as JSON
         average_score: averageScore,
+        total_score: totalScore,
         grade: grade,
         comment: comment || null,
+        generated_by: req.user.id,
+        generated_date: new Date().toISOString(),
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString()
       })
       .select()
       .single();
     
-    if (error) throw error;
+    if (error) {
+      console.error('Insert error:', error);
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to save report: ' + error.message
+      });
+    }
+    
+    console.log('✅ Report saved successfully:', newReport.id);
+    console.log('Subjects stored:', newReport.subjects);
     
     res.json({
       success: true,
-      message: 'Report created successfully',
+      message: 'Report card saved successfully',
       report: newReport
     });
     
@@ -2519,45 +2545,122 @@ app.get('/api/learner/attendance-stats', authenticateToken, async (req, res) => 
 });
 
 // Get learner reports
+// Get learner reports - FIXED
 app.get('/api/learner/reports', authenticateToken, async (req, res) => {
   try {
     console.log(`📊 Fetching reports for learner: ${req.user.id}`);
     
-    const { data: reports, error } = await supabase
-      .from('reports')
-      .select(`
-        *,
-        subject:subject_id(id, name),
-        class:class_id(id, name, year),
-        teacher:teacher_id(id, name)
-      `)
-      .eq('learner_id', req.user.id)
-      .order('created_at', { ascending: false });
+    // First, verify the learner exists
+    const { data: learner, error: learnerError } = await supabase
+      .from('learners')
+      .select('id, name, reg_number, form, class_id')
+      .eq('id', req.user.id)
+      .maybeSingle();
     
-    if (error) {
+    if (learnerError || !learner) {
+      console.error('Learner not found:', req.user.id);
       return res.json({
         success: true,
         data: [],
         count: 0,
-        message: 'No reports found'
+        message: 'Learner profile not found'
       });
     }
     
-    const formattedReports = (reports || []).map(report => ({
-      id: report.id,
-      subject: report.subject?.name || 'Unknown',
-      subject_id: report.subject_id,
-      term: report.term || 'Term 1',
-      year: report.year || new Date().getFullYear(),
-      score: report.score,
-      grade: report.grade,
-      remarks: report.remarks,
-      teacher: report.teacher?.name || 'System',
-      date: report.created_at,
-      class: report.class?.name,
-      status: report.status || 'completed'
-    }));
+    console.log('Found learner:', learner.name, 'ID:', learner.id);
     
+    // Fetch reports for this learner - using integer ID from your database
+    const { data: reports, error } = await supabase
+      .from('reports')
+      .select('*')
+      .eq('learner_id', parseInt(req.user.id)) // Ensure integer comparison
+      .order('created_at', { ascending: false });
+    
+    if (error) {
+      console.error('Error fetching reports:', error);
+      return res.json({
+        success: true,
+        data: [],
+        count: 0,
+        message: 'Error fetching reports'
+      });
+    }
+    
+    console.log(`Found ${reports?.length || 0} reports for learner ${learner.name}`);
+    
+    // Format the reports properly
+    const formattedReports = (reports || []).map(report => {
+      // Parse subjects if it's a string, otherwise use as is
+      let subjects = report.subjects;
+      if (typeof subjects === 'string') {
+        try {
+          subjects = JSON.parse(subjects);
+          console.log(`Parsed subjects for report ${report.id}:`, subjects);
+        } catch (e) {
+          console.error('Failed to parse subjects JSON for report:', report.id, e);
+          subjects = [];
+        }
+      }
+      
+      // Ensure subjects is an array
+      if (!Array.isArray(subjects)) {
+        console.warn(`Subjects is not an array for report ${report.id}:`, subjects);
+        subjects = [];
+      }
+      
+      // Calculate average score if not already present
+      let averageScore = report.average_score;
+      if (!averageScore && subjects.length > 0) {
+        const totalScore = subjects.reduce((sum, subj) => sum + (subj.score || 0), 0);
+        averageScore = Math.round(totalScore / subjects.length);
+      }
+      
+      // Determine grade if not present
+      let grade = report.grade;
+      if (!grade && averageScore) {
+        if (averageScore >= 75) grade = 'A';
+        else if (averageScore >= 65) grade = 'B';
+        else if (averageScore >= 55) grade = 'C';
+        else if (averageScore >= 40) grade = 'D';
+        else grade = 'F';
+      }
+      
+      return {
+        id: report.id,
+        learner_id: report.learner_id,
+        term: report.term || 'Term 1',
+        academic_year: report.academic_year || new Date().getFullYear(),
+        form: report.form || learner.form,
+        grade: grade,
+        class_id: report.class_id,
+        subjects: subjects,
+        average_score: averageScore,
+        total_score: report.total_score,
+        rank: report.rank,
+        comment: report.comment || report.teacher_comment || null,
+        teacher_comment: report.teacher_comment,
+        principal_comment: report.principal_comment,
+        is_finalized: report.is_finalized,
+        generated_by: report.generated_by,
+        generated_date: report.generated_date,
+        created_at: report.created_at,
+        updated_at: report.updated_at
+      };
+    });
+    
+    // Log sample for debugging
+    if (formattedReports.length > 0) {
+      console.log('Sample formatted report:', {
+        id: formattedReports[0].id,
+        term: formattedReports[0].term,
+        form: formattedReports[0].form,
+        subjects_count: formattedReports[0].subjects?.length,
+        average_score: formattedReports[0].average_score,
+        subjects_sample: formattedReports[0].subjects?.slice(0, 2)
+      });
+    }
+    
+    // Return the data in the expected format
     res.json({
       success: true,
       data: formattedReports,
@@ -2565,7 +2668,7 @@ app.get('/api/learner/reports', authenticateToken, async (req, res) => {
     });
     
   } catch (error) {
-    console.error('Error fetching learner reports:', error);
+    console.error('Error in learner reports endpoint:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to fetch reports',
