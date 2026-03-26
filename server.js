@@ -2221,6 +2221,7 @@ app.get('/api/teacher/learner-subjects/:learnerId', authenticateToken, async (re
 // ============================================
 
 // Get teacher attendance records
+// Get teacher attendance records - FIXED
 app.get('/api/teacher/attendance', authenticateToken, async (req, res) => {
   try {
     console.log('📅 Fetching attendance records for teacher:', req.user.id);
@@ -2255,7 +2256,7 @@ app.get('/api/teacher/attendance', authenticateToken, async (req, res) => {
     
     const { data: learners, error: learnersError } = await supabase
       .from('learners')
-      .select('id, name, reg_number')
+      .select('id, name, reg_number, form')
       .eq('class_id', teacher.class_id);
     
     if (learnersError) {
@@ -2286,17 +2287,20 @@ app.get('/api/teacher/attendance', authenticateToken, async (req, res) => {
         
         const learnerMap = {};
         learners.forEach(l => {
-          learnerMap[l.id] = { name: l.name, reg_number: l.reg_number };
+          learnerMap[l.id] = { name: l.name, reg_number: l.reg_number, form: l.form };
         });
         
+        const totalRecords = attendanceData.length;
+        const presentCount = attendanceData.filter(a => a.status === 'present').length;
+        const absentCount = attendanceData.filter(a => a.status === 'absent').length;
+        const lateCount = attendanceData.filter(a => a.status === 'late').length;
+        
         stats = {
-          total: attendanceData.length,
-          present: attendanceData.filter(a => a.status === 'present').length,
-          absent: attendanceData.filter(a => a.status === 'absent').length,
-          late: attendanceData.filter(a => a.status === 'late').length,
-          rate: attendanceData.length > 0 
-            ? Math.round((attendanceData.filter(a => a.status === 'present' || a.status === 'late').length / attendanceData.length) * 100)
-            : 0
+          total: totalRecords,
+          present: presentCount,
+          absent: absentCount,
+          late: lateCount,
+          rate: totalRecords > 0 ? Math.round(((presentCount + lateCount) / totalRecords) * 100) : 0
         };
         
         attendanceData = attendanceData.map(record => ({
@@ -2304,11 +2308,20 @@ app.get('/api/teacher/attendance', authenticateToken, async (req, res) => {
           learner_id: record.learner_id,
           learner_name: learnerMap[record.learner_id]?.name || 'Unknown',
           learner_reg: learnerMap[record.learner_id]?.reg_number || 'N/A',
+          learner_form: learnerMap[record.learner_id]?.form || 'N/A',
           date: record.date,
           status: record.status,
+          status_display: record.status === 'present' ? 'Present' : 
+                         record.status === 'late' ? 'Late' : 'Absent',
           term: record.term || 1,
           year: record.year || new Date().getFullYear(),
-          recorded_at: record.created_at
+          recorded_at: record.created_at || record.updated_at,
+          date_formatted: new Date(record.date).toLocaleDateString('en', {
+            weekday: 'long',
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric'
+          })
         }));
       }
     }
@@ -2317,7 +2330,12 @@ app.get('/api/teacher/attendance', authenticateToken, async (req, res) => {
       success: true,
       data: {
         stats,
-        records: attendanceData
+        records: attendanceData,
+        summary: {
+          total_learners: learners.length,
+          total_records: stats.total,
+          present_rate: stats.rate
+        }
       }
     });
     
@@ -2494,53 +2512,222 @@ app.get('/api/learner/profile', authenticateToken, async (req, res) => {
 });
 
 // Get learner attendance
+// Get learner attendance - FIXED
 app.get('/api/learner/attendance', authenticateToken, async (req, res) => {
   try {
-    const { data, error } = await supabase
+    console.log(`📅 Fetching attendance for learner: ${req.user.id}`);
+    
+    // First, verify the learner exists
+    const { data: learner, error: learnerError } = await supabase
+      .from('learners')
+      .select('id, name, reg_number, form, class_id')
+      .eq('id', parseInt(req.user.id))
+      .maybeSingle();
+    
+    if (learnerError || !learner) {
+      console.error('Learner not found:', req.user.id);
+      return res.json({
+        success: true,
+        data: {
+          stats: { total: 0, present: 0, absent: 0, late: 0, rate: 0 },
+          records: []
+        }
+      });
+    }
+    
+    console.log('Found learner:', learner.name);
+    
+    // Fetch all attendance records for this learner
+    const { data: attendance, error } = await supabase
       .from('attendance')
       .select('*')
-      .eq('learner_id', req.user.id)
+      .eq('learner_id', parseInt(req.user.id))
       .order('date', { ascending: false });
     
-    if (error) throw error;
+    if (error) {
+      console.error('Error fetching attendance:', error);
+      return res.json({
+        success: true,
+        data: {
+          stats: { total: 0, present: 0, absent: 0, late: 0, rate: 0 },
+          records: []
+        }
+      });
+    }
+    
+    console.log(`Found ${attendance?.length || 0} attendance records for learner`);
+    
+    // Calculate statistics
+    const totalRecords = attendance?.length || 0;
+    const presentCount = attendance?.filter(a => a.status === 'present').length || 0;
+    const absentCount = attendance?.filter(a => a.status === 'absent').length || 0;
+    const lateCount = attendance?.filter(a => a.status === 'late').length || 0;
+    
+    // Calculate attendance rate (present + late count as attended)
+    const attendedCount = presentCount + lateCount;
+    const attendanceRate = totalRecords > 0 ? Math.round((attendedCount / totalRecords) * 100) : 0;
+    
+    // Format attendance records for frontend
+    const formattedRecords = (attendance || []).map(record => ({
+      id: record.id,
+      learner_id: record.learner_id,
+      date: record.date,
+      status: record.status,
+      term: record.term || 1,
+      year: record.year || new Date().getFullYear(),
+      recorded_at: record.created_at || record.updated_at,
+      // Add helpful display fields
+      status_display: record.status === 'present' ? 'Present' : 
+                      record.status === 'late' ? 'Late' : 'Absent',
+      status_color: record.status === 'present' ? 'green' : 
+                    record.status === 'late' ? 'yellow' : 'red',
+      date_formatted: new Date(record.date).toLocaleDateString('en', {
+        weekday: 'long',
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric'
+      })
+    }));
+    
+    // Group by term for potential term filtering
+    const recordsByTerm = {};
+    formattedRecords.forEach(record => {
+      const termKey = `Term ${record.term} ${record.year}`;
+      if (!recordsByTerm[termKey]) {
+        recordsByTerm[termKey] = [];
+      }
+      recordsByTerm[termKey].push(record);
+    });
+    
+    const stats = {
+      total: totalRecords,
+      present: presentCount,
+      absent: absentCount,
+      late: lateCount,
+      rate: attendanceRate,
+      attended: attendedCount,
+      // Additional helpful stats
+      present_percentage: totalRecords > 0 ? Math.round((presentCount / totalRecords) * 100) : 0,
+      late_percentage: totalRecords > 0 ? Math.round((lateCount / totalRecords) * 100) : 0,
+      absent_percentage: totalRecords > 0 ? Math.round((absentCount / totalRecords) * 100) : 0
+    };
+    
+    // Log stats for debugging
+    console.log('Attendance stats:', stats);
+    
     res.json({
       success: true,
-      attendance: data || []
+      data: {
+        stats: stats,
+        records: formattedRecords,
+        by_term: recordsByTerm,
+        summary: {
+          total_days: totalRecords,
+          present_days: presentCount,
+          late_days: lateCount,
+          absent_days: absentCount,
+          attendance_rate: attendanceRate
+        }
+      }
     });
+    
   } catch (error) {
-    console.error('Error fetching attendance:', error);
-    res.status(500).json({ error: error.message });
+    console.error('Error in learner attendance endpoint:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch attendance records',
+      error: error.message
+    });
   }
 });
 
 // Get learner attendance stats
+// Get learner attendance stats - FIXED
 app.get('/api/learner/attendance-stats', authenticateToken, async (req, res) => {
   try {
-    const { term = 1, year = new Date().getFullYear() } = req.query;
+    const { term, year } = req.query;
+    const currentYear = year || new Date().getFullYear();
+    const currentTerm = term ? parseInt(term) : null;
     
-    const { data: attendance, error } = await supabase
+    console.log(`📊 Fetching attendance stats for learner: ${req.user.id}, Term: ${currentTerm}, Year: ${currentYear}`);
+    
+    // Build query
+    let query = supabase
       .from('attendance')
-      .select('status')
-      .eq('learner_id', req.user.id)
-      .eq('term', term)
-      .eq('year', year);
+      .select('status, date, term, year')
+      .eq('learner_id', parseInt(req.user.id));
     
-    if (error) throw error;
+    if (currentTerm) {
+      query = query.eq('term', currentTerm);
+    }
+    if (currentYear) {
+      query = query.eq('year', currentYear);
+    }
+    
+    const { data: attendance, error } = await query.order('date', { ascending: false });
+    
+    if (error) {
+      console.error('Error fetching attendance stats:', error);
+      return res.json({
+        success: true,
+        data: {
+          percentage: 0,
+          present: 0,
+          absences: 0,
+          late: 0,
+          total: 0,
+          term: currentTerm || 'All',
+          year: currentYear
+        }
+      });
+    }
     
     const totalDays = attendance?.length || 0;
     const presentDays = attendance?.filter(a => a.status === 'present').length || 0;
-    const percentage = totalDays > 0 ? Math.round((presentDays / totalDays) * 100) : 0;
+    const lateDays = attendance?.filter(a => a.status === 'late').length || 0;
+    const absentDays = attendance?.filter(a => a.status === 'absent').length || 0;
+    
+    // Calculate percentage (present + late count as attended)
+    const attendedDays = presentDays + lateDays;
+    const percentage = totalDays > 0 ? Math.round((attendedDays / totalDays) * 100) : 0;
+    
+    // Calculate monthly breakdown
+    const monthlyData = {};
+    attendance?.forEach(record => {
+      const date = new Date(record.date);
+      const monthKey = date.toLocaleString('en', { month: 'long', year: 'numeric' });
+      if (!monthlyData[monthKey]) {
+        monthlyData[monthKey] = { present: 0, late: 0, absent: 0, total: 0 };
+      }
+      monthlyData[monthKey][record.status]++;
+      monthlyData[monthKey].total++;
+    });
     
     res.json({
       success: true,
-      percentage,
-      present: presentDays,
-      absences: totalDays - presentDays,
-      total: totalDays
+      data: {
+        percentage: percentage,
+        present: presentDays,
+        late: lateDays,
+        absences: absentDays,
+        total: totalDays,
+        term: currentTerm || 'All',
+        year: currentYear,
+        monthly_breakdown: monthlyData,
+        attendance_rate: percentage,
+        present_rate: totalDays > 0 ? Math.round((presentDays / totalDays) * 100) : 0,
+        late_rate: totalDays > 0 ? Math.round((lateDays / totalDays) * 100) : 0,
+        absent_rate: totalDays > 0 ? Math.round((absentDays / totalDays) * 100) : 0
+      }
     });
+    
   } catch (error) {
     console.error('Error fetching attendance stats:', error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch attendance stats',
+      error: error.message
+    });
   }
 });
 
