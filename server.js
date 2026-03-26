@@ -1742,25 +1742,91 @@ app.delete('/api/teacher/remove-learner/:learnerId', authenticateToken, async (r
     const { learnerId } = req.params;
     
     console.log('🗑️ Removing learner from teacher class:', learnerId);
+    console.log('Teacher ID:', req.user.id);
     
-    const { data, error } = await supabase
+    // First, verify the teacher has a class assigned
+    const { data: teacher, error: teacherError } = await supabase
+      .from('users')
+      .select('class_id')
+      .eq('id', req.user.id)
+      .maybeSingle();
+    
+    if (teacherError) {
+      console.error('Error fetching teacher:', teacherError);
+      return res.status(500).json({
+        success: false,
+        message: 'Database error while verifying teacher'
+      });
+    }
+    
+    if (!teacher?.class_id) {
+      return res.status(400).json({
+        success: false,
+        message: 'You have not been assigned to a class yet.'
+      });
+    }
+    
+    // Verify the learner exists and belongs to the teacher's class
+    const { data: learner, error: learnerError } = await supabase
       .from('learners')
-      .update({ class_id: null, updated_at: new Date().toISOString() })
-      .eq('id', learnerId)
+      .select('id, name, class_id')
+      .eq('id', parseInt(learnerId))
+      .maybeSingle();
+    
+    if (learnerError) {
+      console.error('Error fetching learner:', learnerError);
+      return res.status(500).json({
+        success: false,
+        message: 'Database error while checking learner'
+      });
+    }
+    
+    if (!learner) {
+      return res.status(404).json({
+        success: false,
+        message: 'Learner not found'
+      });
+    }
+    
+    // Check if the learner is actually in the teacher's class
+    if (learner.class_id !== teacher.class_id) {
+      return res.status(400).json({
+        success: false,
+        message: 'This learner is not in your class'
+      });
+    }
+    
+    // Remove the learner by setting class_id to null
+    const { data: updatedLearner, error } = await supabase
+      .from('learners')
+      .update({ 
+        class_id: null, 
+        updated_at: new Date().toISOString() 
+      })
+      .eq('id', parseInt(learnerId))
       .select();
     
-    if (error) throw error;
+    if (error) {
+      console.error('Error updating learner:', error);
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to remove learner: ' + error.message
+      });
+    }
+    
+    console.log(`✅ Learner ${learner.name} (ID: ${learnerId}) removed from class ${teacher.class_id}`);
     
     res.json({
       success: true,
-      message: 'Learner removed from your class'
+      message: `Learner removed from your class successfully`,
+      learner: updatedLearner ? updatedLearner[0] : null
     });
     
   } catch (err) {
     console.error('Error removing learner:', err);
     res.status(500).json({
       success: false,
-      message: 'Database error: ' + err.message
+      message: 'Server error: ' + err.message
     });
   }
 });
