@@ -1049,20 +1049,22 @@ app.get('/api/admin/learners', authenticateToken, authenticateAdmin, async (req,
   }
 });
 
-// Register a new learner
+
+// Register a new learner - Admin assigns class, but teacher must accept
 app.post('/api/admin/learners', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
     const { name, reg_number, class_id, form, enrollment_date } = req.body;
     
-    console.log('📝 Admin registering learner:', { name, reg_number, class_id, form, enrollment_date });
+    console.log('📝 Admin registering learner:', { name, reg_number, class_id, form });
     
-    if (!name || !reg_number || !class_id) {
+    if (!name || !reg_number) {
       return res.status(400).json({
         success: false,
-        message: 'Name, registration number, and class are required'
+        message: 'Name and registration number are required'
       });
     }
     
+    // Check if registration number already exists
     const { data: existing, error: checkError } = await supabase
       .from('learners')
       .select('id')
@@ -1076,26 +1078,49 @@ app.post('/api/admin/learners', authenticateToken, authenticateAdmin, async (req
       });
     }
     
-    const { data: classExists, error: classError } = await supabase
-      .from('classes')
-      .select('id, name')
-      .eq('id', class_id)
-      .maybeSingle();
+    let assignedForm = form;
+    let assignedClassId = null;
     
-    if (classError || !classExists) {
-      return res.status(404).json({
-        success: false,
-        message: 'Class not found'
-      });
+    // If class_id is provided, verify it exists
+    if (class_id) {
+      const { data: classExists, error: classError } = await supabase
+        .from('classes')
+        .select('id, name')
+        .eq('id', class_id)
+        .maybeSingle();
+      
+      if (classError || !classExists) {
+        return res.status(404).json({
+          success: false,
+          message: 'Selected class not found'
+        });
+      }
+      
+      assignedClassId = classExists.id;
+      
+      // If form not provided, derive from class name
+      if (!assignedForm) {
+        const formMatch = classExists.name.match(/Form\s*(\d+)/i);
+        if (formMatch) {
+          assignedForm = `Form ${formMatch[1]}`;
+        }
+      }
     }
     
+    // If still no form, default to Form 1
+    if (!assignedForm) {
+      assignedForm = 'Form 1';
+    }
+    
+    // Insert new learner with assigned class, but NOT accepted by teacher yet
     const { data: newLearner, error } = await supabase
       .from('learners')
       .insert({
-        name: name,
-        reg_number: reg_number,
-        class_id: classExists.id,
-        form: form || getFormName(classExists.name),
+        name: name.trim(),
+        reg_number: reg_number.toUpperCase(),
+        form: assignedForm,
+        class_id: assignedClassId,  // Assigned to a class
+        is_accepted_by_teacher: false,  // ← Teacher hasn't accepted yet
         status: 'Active',
         enrollment_date: enrollment_date || new Date().toISOString().split('T')[0],
         created_at: new Date().toISOString(),
@@ -1115,13 +1140,13 @@ app.post('/api/admin/learners', authenticateToken, authenticateAdmin, async (req
     await logAdminAction(
       req.user.id,
       'REGISTER_LEARNER',
-      `Registered learner: ${name} (${reg_number}) in class ${classExists.name}`,
+      `Registered learner: ${name} (${reg_number}) in class ${assignedClassId || 'unassigned'}. Teacher must accept them.`,
       req.ip
     );
     
     res.json({
       success: true,
-      message: 'Learner registered successfully',
+      message: `Learner registered successfully. They will appear in the teacher's "Add Learners" modal for approval.`,
       learner: newLearner
     });
     
@@ -1614,14 +1639,36 @@ app.get('/api/teacher/dashboard/stats', authenticateToken, async (req, res) => {
   }
 });
 
-// Get all learners (for teacher to select from)
+
+// Get all learners for teacher to select from (only those pending acceptance)
 app.get('/api/teacher/all-learners', authenticateToken, async (req, res) => {
   try {
-    console.log('📚 Fetching all learners for teacher');
+    console.log('📚 Fetching all learners for teacher to add');
     
+    // First, get teacher's class
+    const { data: teacher, error: teacherError } = await supabase
+      .from('users')
+      .select('class_id')
+      .eq('id', req.user.id)
+      .maybeSingle();
+    
+    if (teacherError) throw teacherError;
+    
+    if (!teacher?.class_id) {
+      return res.json({
+        success: true,
+        learners: []
+      });
+    }
+    
+    // Return learners that:
+    // 1. Are in the teacher's class
+    // 2. Have NOT been accepted yet
     const { data: learners, error } = await supabase
       .from('learners')
-      .select('id, name, reg_number, form, status, class_id')
+      .select('id, name, reg_number, form, status, class_id, is_accepted_by_teacher')
+      .eq('class_id', teacher.class_id)
+      .eq('is_accepted_by_teacher', false)  // ← Not yet accepted
       .eq('status', 'Active')
       .order('name', { ascending: true });
     
@@ -1640,11 +1687,10 @@ app.get('/api/teacher/all-learners', authenticateToken, async (req, res) => {
     });
   }
 });
-
-// Get learners assigned to this teacher
+// Get learners assigned to this teacher that have been accepted
 app.get('/api/teacher/my-learners', authenticateToken, async (req, res) => {
   try {
-    console.log('👥 Fetching learners assigned to teacher:', req.user.id);
+    console.log('👥 Fetching learners accepted by teacher:', req.user.id);
     
     const { data: teacher, error: teacherError } = await supabase
       .from('users')
@@ -1661,10 +1707,14 @@ app.get('/api/teacher/my-learners', authenticateToken, async (req, res) => {
       });
     }
     
+    // Only return learners that are:
+    // 1. In the teacher's class
+    // 2. Have been accepted by the teacher (is_accepted_by_teacher = true)
     const { data: learners, error } = await supabase
       .from('learners')
       .select('id, name, reg_number, form, status, class_id')
       .eq('class_id', teacher.class_id)
+      .eq('is_accepted_by_teacher', true)  // ← Only accepted learners
       .eq('status', 'Active')
       .order('name', { ascending: true });
     
@@ -1685,11 +1735,12 @@ app.get('/api/teacher/my-learners', authenticateToken, async (req, res) => {
 });
 
 // Add learners to teacher's class
+// Accept learners into teacher's class (set is_accepted_by_teacher = true)
 app.post('/api/teacher/add-learners', authenticateToken, async (req, res) => {
   try {
     const { learnerIds } = req.body;
     
-    console.log('📝 Adding learners to teacher class:', { learnerIds });
+    console.log('📝 Accepting learners to teacher class:', { learnerIds });
     
     if (!learnerIds || !Array.isArray(learnerIds) || learnerIds.length === 0) {
       return res.status(400).json({
@@ -1713,13 +1764,41 @@ app.post('/api/teacher/add-learners', authenticateToken, async (req, res) => {
       });
     }
     
+    // Verify all learners are in the teacher's class and not already accepted
+    const { data: learnersToAccept, error: checkError } = await supabase
+      .from('learners')
+      .select('id, name')
+      .in('id', learnerIds)
+      .eq('class_id', teacher.class_id)
+      .eq('is_accepted_by_teacher', false);
+    
+    if (checkError) throw checkError;
+    
+    if (learnersToAccept.length !== learnerIds.length) {
+      return res.status(400).json({
+        success: false,
+        message: 'Some learners are not available to accept'
+      });
+    }
+    
+    // Accept the learners
     const { data, error } = await supabase
       .from('learners')
-      .update({ class_id: teacher.class_id, updated_at: new Date().toISOString() })
+      .update({ 
+        is_accepted_by_teacher: true,  // ← Mark as accepted
+        updated_at: new Date().toISOString() 
+      })
       .in('id', learnerIds)
       .select();
     
     if (error) throw error;
+    
+    await logAdminAction(
+      req.user.id,
+      'ACCEPT_LEARNERS',
+      `Teacher accepted ${learnerIds.length} learner(s) into class`,
+      req.ip
+    );
     
     res.json({
       success: true,
@@ -1728,7 +1807,7 @@ app.post('/api/teacher/add-learners', authenticateToken, async (req, res) => {
     });
     
   } catch (err) {
-    console.error('Error adding learners:', err);
+    console.error('Error accepting learners:', err);
     res.status(500).json({
       success: false,
       message: 'Database error: ' + err.message
@@ -1737,27 +1816,20 @@ app.post('/api/teacher/add-learners', authenticateToken, async (req, res) => {
 });
 
 // Remove learner from teacher's class
+// Remove learner from teacher's class (set is_accepted_by_teacher = false)
 app.delete('/api/teacher/remove-learner/:learnerId', authenticateToken, async (req, res) => {
   try {
     const { learnerId } = req.params;
     
     console.log('🗑️ Removing learner from teacher class:', learnerId);
-    console.log('Teacher ID:', req.user.id);
     
-    // First, verify the teacher has a class assigned
     const { data: teacher, error: teacherError } = await supabase
       .from('users')
       .select('class_id')
       .eq('id', req.user.id)
       .maybeSingle();
     
-    if (teacherError) {
-      console.error('Error fetching teacher:', teacherError);
-      return res.status(500).json({
-        success: false,
-        message: 'Database error while verifying teacher'
-      });
-    }
+    if (teacherError) throw teacherError;
     
     if (!teacher?.class_id) {
       return res.status(400).json({
@@ -1766,44 +1838,15 @@ app.delete('/api/teacher/remove-learner/:learnerId', authenticateToken, async (r
       });
     }
     
-    // Verify the learner exists and belongs to the teacher's class
-    const { data: learner, error: learnerError } = await supabase
-      .from('learners')
-      .select('id, name, class_id')
-      .eq('id', parseInt(learnerId))
-      .maybeSingle();
-    
-    if (learnerError) {
-      console.error('Error fetching learner:', learnerError);
-      return res.status(500).json({
-        success: false,
-        message: 'Database error while checking learner'
-      });
-    }
-    
-    if (!learner) {
-      return res.status(404).json({
-        success: false,
-        message: 'Learner not found'
-      });
-    }
-    
-    // Check if the learner is actually in the teacher's class
-    if (learner.class_id !== teacher.class_id) {
-      return res.status(400).json({
-        success: false,
-        message: 'This learner is not in your class'
-      });
-    }
-    
-    // Remove the learner by setting class_id to null
+    // Remove the learner by setting is_accepted_by_teacher = false
     const { data: updatedLearner, error } = await supabase
       .from('learners')
       .update({ 
-        class_id: null, 
+        is_accepted_by_teacher: false,  // ← Mark as not accepted
         updated_at: new Date().toISOString() 
       })
       .eq('id', parseInt(learnerId))
+      .eq('class_id', teacher.class_id)
       .select();
     
     if (error) {
@@ -1814,12 +1857,17 @@ app.delete('/api/teacher/remove-learner/:learnerId', authenticateToken, async (r
       });
     }
     
-    console.log(`✅ Learner ${learner.name} (ID: ${learnerId}) removed from class ${teacher.class_id}`);
+    if (!updatedLearner || updatedLearner.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Learner not found in your class'
+      });
+    }
     
     res.json({
       success: true,
-      message: `Learner removed from your class successfully`,
-      learner: updatedLearner ? updatedLearner[0] : null
+      message: `Learner removed from your class and will appear in "Add Learners" list again`,
+      learner: updatedLearner[0]
     });
     
   } catch (err) {
@@ -1830,7 +1878,6 @@ app.delete('/api/teacher/remove-learner/:learnerId', authenticateToken, async (r
     });
   }
 });
-
 // Get all learners (Teacher view)
 app.get('/api/teacher/learners', authenticateToken, async (req, res) => {
   try {
