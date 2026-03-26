@@ -571,7 +571,7 @@ app.get('/api/admin/teachers', authenticateToken, authenticateAdmin, async (req,
   try {
     const { data: teachers, error } = await supabase
       .from('users')
-      .select('id, email, name, department, specialization, phone, address, employee_id, is_active, created_at')
+      .select('id, email, name, department, specialization, phone, address, employee_id, is_active, created_at, class_id')  // ← ADDED class_id
       .eq('role', 'teacher')
       .order('name', { ascending: true });
     
@@ -587,6 +587,7 @@ app.get('/api/admin/teachers', authenticateToken, authenticateAdmin, async (req,
       phone: teacher.phone || 'Not provided',
       address: teacher.address || 'Not provided',
       is_active: teacher.is_active !== false,
+      class_id: teacher.class_id,  // ← ADDED class_id to response
       joined_at: teacher.created_at
     }));
     
