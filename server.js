@@ -702,11 +702,11 @@ app.post('/api/admin/teachers', authenticateToken, authenticateAdmin, async (req
 });
 
 // Update teacher
-// Update teacher
+// Update teacher - FIXED VERSION
 app.put('/api/admin/teachers/:teacherId', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
     const { teacherId } = req.params;
-    const { name, email, department, specialization, phone, address, is_active, class_id } = req.body;  // ← Added class_id
+    const { name, email, department, specialization, phone, address, is_active, class_id } = req.body;
     
     const updateData = {};
     if (name) updateData.name = name;
@@ -716,8 +716,10 @@ app.put('/api/admin/teachers/:teacherId', authenticateToken, authenticateAdmin, 
     if (phone) updateData.phone = phone;
     if (address) updateData.address = address;
     if (is_active !== undefined) updateData.is_active = is_active;
-    if (class_id !== undefined) updateData.class_id = class_id;  // ← ADD THIS LINE - allows setting class_id to null or a value
+    if (class_id !== undefined) updateData.class_id = class_id;  // ← CRITICAL LINE
     updateData.updated_at = new Date().toISOString();
+    
+    console.log('Updating teacher with data:', updateData);  // Debug log
     
     const { data: updatedTeacher, error } = await supabase
       .from('users')
@@ -737,23 +739,10 @@ app.put('/api/admin/teachers/:teacherId', authenticateToken, authenticateAdmin, 
       throw error;
     }
     
-    // Fetch the class name for better logging
-    let classInfo = '';
-    if (class_id) {
-      const { data: classData } = await supabase
-        .from('classes')
-        .select('name')
-        .eq('id', class_id)
-        .single();
-      classInfo = classData ? ` to class: ${classData.name}` : '';
-    } else {
-      classInfo = ' (removed from class)';
-    }
-    
     await logAdminAction(
       req.user.id,
       'UPDATE_TEACHER',
-      `Updated teacher ID ${teacherId}${classInfo}`,
+      `Updated teacher ID ${teacherId}${class_id ? `, assigned to class: ${class_id}` : ''}`,
       req.ip
     );
     
