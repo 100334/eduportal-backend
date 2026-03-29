@@ -3809,6 +3809,87 @@ app.use((req, res) => {
 });
 
 // ============================================
+// QUIZ ROUTES
+// ============================================
+
+// Get all active quizzes for learners
+app.get('/api/quizzes', authenticateToken, async (req, res) => {
+  try {
+    const { data: quizzes, error } = await supabase
+      .from('quizzes')
+      .select('*')
+      .eq('is_active', true)
+      .order('created_at', { ascending: false });
+
+    if (error) throw error;
+
+    res.json({
+      success: true,
+      quizzes: quizzes || []
+    });
+  } catch (err) {
+    console.error('❌ Error fetching quizzes:', err.message);
+    res.status(500).json({ success: false, message: 'Database error fetching quizzes' });
+  }
+});
+
+// Get quiz history for the logged-in learner
+app.get('/api/quiz/history', authenticateToken, async (req, res) => {
+  try {
+    // Note: req.user.id is set by your authenticateToken middleware
+    const { data: history, error } = await supabase
+      .from('quiz_attempts')
+      .select(`
+        *,
+        quiz:quiz_id (title)
+      `)
+      .eq('learner_id', req.user.id)
+      .order('completed_at', { ascending: false });
+
+    if (error) throw error;
+
+    res.json({
+      success: true,
+      attempts: history || []
+    });
+  } catch (err) {
+    console.error('❌ Error fetching quiz history:', err.message);
+    res.status(500).json({ success: false, message: 'Database error fetching history' });
+  }
+});
+
+// Submit quiz results
+app.post('/api/quizzes/submit', authenticateToken, async (req, res) => {
+  try {
+    const { quizId, score, totalQuestions, percentage } = req.body;
+    
+    const { data: attempt, error } = await supabase
+      .from('quiz_attempts')
+      .insert({
+        quiz_id: quizId,
+        learner_id: req.user.id,
+        score: score,
+        total_questions: totalQuestions,
+        percentage: percentage,
+        completed_at: new Date().toISOString()
+      })
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    res.json({
+      success: true,
+      message: 'Quiz submitted successfully',
+      attempt
+    });
+  } catch (err) {
+    console.error('❌ Error submitting quiz:', err.message);
+    res.status(500).json({ success: false, message: 'Failed to save quiz result' });
+  }
+});
+
+// ============================================
 // ERROR HANDLER
 // ============================================
 
