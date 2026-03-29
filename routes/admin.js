@@ -172,32 +172,6 @@ router.post('/teachers', async (req, res) => {
     }
 });
 
-// Get all questions for a specific quiz
-router.get('/quizzes/:quizId/questions', async (req, res) => {
-    const { quizId } = req.params;
-    const supabase = req.app.locals.supabase;
-
-    try {
-        const { data, error } = await supabase
-            .from('questions')
-            .select('*')
-            .eq('quiz_id', quizId)
-            .order('created_at', { ascending: true });
-
-        if (error) throw error;
-
-        res.json({
-            success: true,
-            questions: data || []
-        });
-    } catch (error) {
-        console.error('Error fetching questions:', error);
-        res.status(500).json({ 
-            success: false, 
-            error: 'Failed to fetch questions' 
-        });
-    }
-});
 // ============ LEARNER MANAGEMENT ============
 
 // Get all learners
@@ -435,6 +409,49 @@ router.get('/stats', async (req, res) => {
     } catch (error) {
         console.error('Error fetching stats:', error);
         res.status(500).json({ error: 'Failed to fetch stats' });
+    }
+});
+
+// ============ QUIZ & QUESTION MANAGEMENT ============
+
+// Add a question to a specific quiz
+router.post('/quizzes/:quizId/questions', async (req, res) => {
+    const { quizId } = req.params;
+    const { 
+        question_text, 
+        options, 
+        correct_option, 
+        points, 
+        explanation 
+    } = req.body;
+
+    const supabase = req.app.locals.supabase;
+
+    try {
+        // Insert the question linked to the quizId (UUID)
+        const { data, error } = await supabase
+            .from('questions')
+            .insert([{
+                quiz_id: quizId,
+                question_text,
+                options: options, // Ensure this is an array or JSONB in Supabase
+                correct_option,
+                points: points || 1,
+                explanation
+            }])
+            .select()
+            .single();
+
+        if (error) throw error;
+
+        res.status(201).json({
+            success: true,
+            message: 'Question added successfully',
+            question: data
+        });
+    } catch (error) {
+        console.error('Error adding question:', error);
+        res.status(500).json({ error: 'Failed to add question to database' });
     }
 });
 
