@@ -3440,60 +3440,6 @@ app.get('/api/admin/quizzes', authenticateToken, authenticateAdmin, async (req, 
   }
 });
 
-// Create a new quiz (admin)
-app.post('/api/admin/quizzes', authenticateToken, authenticateAdmin, async (req, res) => {
-  try {
-    const { subject, title, description, duration, total_marks, is_active } = req.body;
-    
-    console.log('📝 Creating new quiz:', { subject, title });
-    
-    if (!subject || !title) {
-      return res.status(400).json({
-        success: false,
-        message: 'Subject and title are required'
-      });
-    }
-    
-    const { data: quiz, error } = await supabase
-      .from('quizzes')
-      .insert({
-        subject: subject,
-        title: title,
-        description: description || null,
-        duration: duration || 30,
-        total_marks: total_marks || 0,
-        is_active: is_active !== false,
-        created_by: req.user.id,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
-      })
-      .select()
-      .single();
-    
-    if (error) throw error;
-    
-    await logAdminAction(
-      req.user.id,
-      'CREATE_QUIZ',
-      `Created quiz: ${title} (${subject})`,
-      req.ip
-    );
-    
-    res.json({
-      success: true,
-      message: 'Quiz created successfully',
-      quiz: quiz
-    });
-    
-  } catch (error) {
-    console.error('Error creating quiz:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to create quiz',
-      error: error.message
-    });
-  }
-});
 
 // Update quiz (admin)
 app.put('/api/admin/quizzes/:quizId', authenticateToken, authenticateAdmin, async (req, res) => {
@@ -3595,82 +3541,138 @@ app.delete('/api/admin/quizzes/:quizId', authenticateToken, authenticateAdmin, a
 });
 
 // Add question to quiz (admin)
-app.post('/api/admin/quizzes/:quizId/questions', authenticateToken, authenticateAdmin, async (req, res) => {
+// Create a new quiz (admin) - WITH UUID SUPPORT
+app.post('/api/admin/quizzes', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
-    const { quizId } = req.params;
-    const { question_text, options, correct_answer, explanation, marks, display_order } = req.body;
+    const { subject_id, title, description, duration, total_marks, is_active } = req.body;
     
-    console.log(`📝 Adding question to quiz ${quizId}`);
+    console.log('📝 Creating new quiz:', { subject_id, title, duration });
     
-    if (!question_text || !options || correct_answer === undefined) {
+    if (!subject_id || !title) {
       return res.status(400).json({
         success: false,
-        message: 'Question text, options, and correct answer are required'
+        message: 'Subject ID and title are required'
       });
     }
     
-    let finalDisplayOrder = display_order;
-    if (!finalDisplayOrder) {
-      const { data: maxOrder, error: orderError } = await supabase
-        .from('quiz_questions')
-        .select('display_order')
-        .eq('quiz_id', quizId)
-        .order('display_order', { ascending: false })
-        .limit(1);
-      
-      finalDisplayOrder = (maxOrder && maxOrder[0]?.display_order || 0) + 1;
-    }
-    
-    const { data: question, error } = await supabase
-      .from('quiz_questions')
-      .insert({
-        quiz_id: parseInt(quizId),
-        question_text: question_text,
-        options: options,
-        correct_answer: correct_answer,
-        explanation: explanation || null,
-        marks: marks || 1,
-        display_order: finalDisplayOrder,
-        created_at: new Date().toISOString()
-      })
-      .select()
+    // Verify subject exists (subject_id is UUID)
+    const { data: subject, error: subjectError } = await supabase
+      .from('subjects')
+      .select('id, name')
+      .eq('id', subject_id)  // subject_id is now UUID
+      .eq('status', 'Active')
       .single();
     
-    if (error) throw error;
+    if (subjectError || !subject) {
+      console.error('Subject error:', subjectError);
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid subject selected'
+      });
+    }
     
-    // Update quiz total marks
-    const { data: questions, error: questionsError } = await supabase
-      .from('quiz_questions')
-      .select('marks')
-      .eq('quiz_id', quizId);
+    const quizData = {
+      subject_id: subject_id,  // UUID type
+      title: title.trim(),
+      description: description || null,
+      duration: duration || 30,
+      total_marks: total_marks || 0,
+      is_active: is_active !== false,
+      created_by: req.user.id,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    };
     
-    if (!questionsError && questions) {
-      const totalMarks = questions.reduce((sum, q) => sum + (q.marks || 1), 0);
-      await supabase
-        .from('quizzes')
-        .update({ total_marks: totalMarks, updated_at: new Date().toISOString() })
-        .eq('id', quizId);
+    console.log('Inserting quiz with data:', quizData);
+    
+    const { data: quiz, error } = await supabase
+      .from('quizzes')
+      .insert(quizData)
+      .select(`
+        *,
+        subject:subject_id(id, name)
+      `)
+      .single();
+    
+    if (error) {
+      console.error('Supabase insert error:', error);
+      return res.status(500).json({
+        success: false,
+        message: 'Database error: ' + error.message,
+        details: error
+      });
+    }
+    
+    if (!quiz) {
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to create quiz - no data returned'
+      });
     }
     
     await logAdminAction(
       req.user.id,
-      'ADD_QUESTION',
-      `Added question to quiz ID ${quizId}`,
+      'CREATE_QUIZ',
+      `Created quiz: ${title} for subject: ${subject.name}`,
       req.ip
     );
     
+    console.log('✅ Quiz created successfully:', quiz.id);
+    
     res.json({
       success: true,
-      message: 'Question added successfully',
-      question: question
+      message: 'Quiz created successfully',
+      quiz: {
+        ...quiz,
+        subject_name: quiz.subject?.name
+      }
     });
     
   } catch (error) {
-    console.error('Error adding question:', error);
+    console.error('Error creating quiz:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to add question',
-      error: error.message
+      message: 'Failed to create quiz: ' + error.message
+    });
+  }
+});
+
+// Get available subjects for quiz creation
+// ============================================
+// QUIZ SUBJECTS ENDPOINT
+// ============================================
+
+// Get available subjects for quiz creation
+app.get('/api/admin/quiz-subjects', authenticateToken, authenticateAdmin, async (req, res) => {
+  try {
+    console.log('📚 Fetching available subjects for quizzes');
+    
+    const { data: subjects, error } = await supabase
+      .from('subjects')
+      .select('id, name, code, description')
+      .eq('status', 'Active')
+      .order('name', { ascending: true });
+    
+    if (error) {
+      console.error('Error fetching subjects:', error);
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to fetch subjects: ' + error.message
+      });
+    }
+    
+    console.log(`✅ Found ${subjects?.length || 0} subjects`);
+    
+    res.json({
+      success: true,
+      subjects: subjects || []
+    });
+    
+  } catch (error) {
+    console.error('Error fetching quiz subjects:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch subjects: ' + error.message
     });
   }
 });
