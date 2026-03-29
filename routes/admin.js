@@ -414,44 +414,34 @@ router.get('/stats', async (req, res) => {
 
 // ============ QUIZ & QUESTION MANAGEMENT ============
 
-// Add a question to a specific quiz
+// POST route to add a question
 router.post('/quizzes/:quizId/questions', async (req, res) => {
     const { quizId } = req.params;
-    const { 
-        question_text, 
-        options, 
-        correct_option, 
-        points, 
-        explanation 
-    } = req.body;
-
     const supabase = req.app.locals.supabase;
 
     try {
-        // Insert the question linked to the quizId (UUID)
         const { data, error } = await supabase
-            .from('questions')
+            .from('quiz_questions') // <--- Changed from 'questions' to 'quiz_questions'
             .insert([{
                 quiz_id: quizId,
-                question_text,
-                options: options, // Ensure this is an array or JSONB in Supabase
-                correct_option,
-                points: points || 1,
-                explanation
+                question_text: req.body.question_text,
+                options: req.body.options,
+                correct_option: req.body.correct_option,
+                points: req.body.points || 1,
+                explanation: req.body.explanation
             }])
             .select()
             .single();
 
-        if (error) throw error;
+        if (error) {
+            console.error('Supabase Insert Error:', error.message);
+            return res.status(400).json({ success: false, message: error.message });
+        }
 
-        res.status(201).json({
-            success: true,
-            message: 'Question added successfully',
-            question: data
-        });
-    } catch (error) {
-        console.error('Error adding question:', error);
-        res.status(500).json({ error: 'Failed to add question to database' });
+        res.status(201).json({ success: true, data });
+    } catch (err) {
+        console.error('Server Crash:', err.message);
+        res.status(500).json({ success: false, message: 'Server error: ' + err.message });
     }
 });
 
