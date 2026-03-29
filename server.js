@@ -3042,6 +3042,781 @@ app.use((err, req, res, next) => {
 });
 
 // ============================================
+// QUIZ SYSTEM API ENDPOINTS
+// ============================================
+
+// Get all active quizzes for learners
+app.get('/api/quiz/quizzes', authenticateToken, async (req, res) => {
+  try {
+    console.log('📚 Fetching quizzes for learner:', req.user.id);
+    
+    const { data: quizzes, error } = await supabase
+      .from('quizzes')
+      .select(`
+        *,
+        questions:quiz_questions(count)
+      `)
+      .eq('is_active', true)
+      .order('subject', { ascending: true })
+      .order('created_at', { ascending: false });
+    
+    if (error) throw error;
+    
+    // Get learner's attempts
+    const { data: attempts, error: attemptsError } = await supabase
+      .from('quiz_attempts')
+      .select('quiz_id, score, percentage, status, completed_at')
+      .eq('learner_id', req.user.id);
+    
+    const attemptsMap = {};
+    (attempts || []).forEach(attempt => {
+      attemptsMap[attempt.quiz_id] = attempt;
+    });
+    
+    const quizzesWithStatus = (quizzes || []).map(quiz => ({
+      ...quiz,
+      question_count: parseInt(quiz.questions?.[0]?.count || 0),
+      attempted: !!attemptsMap[quiz.id],
+      attempt_status: attemptsMap[quiz.id]?.status || null,
+      score: attemptsMap[quiz.id]?.score || null,
+      percentage: attemptsMap[quiz.id]?.percentage || null
+    }));
+    
+    res.json({
+      success: true,
+      quizzes: quizzesWithStatus
+    });
+    
+  } catch (error) {
+    console.error('Error fetching quizzes:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch quizzes',
+      error: error.message
+    });
+  }
+});
+
+// Get quiz questions for a specific quiz
+app.get('/api/quiz/:quizId/questions', authenticateToken, async (req, res) => {
+  try {
+    const { quizId } = req.params;
+    
+    console.log(`📝 Fetching questions for quiz: ${quizId}`);
+    
+    // Check if learner has already completed this quiz
+    const { data: existingAttempt, error: attemptError } = await supabase
+      .from('quiz_attempts')
+      .select('id, status, score, answers')
+      .eq('learner_id', req.user.id)
+      .eq('quiz_id', quizId)
+      .maybeSingle();
+    
+    if (existingAttempt && existingAttempt.status === 'completed') {
+      return res.json({
+        success: true,
+        already_completed: true,
+        attempt: existingAttempt
+      });
+    }
+    
+    // Get quiz details
+    const { data: quiz, error: quizError } = await supabase
+      .from('quizzes')
+      .select('*')
+      .eq('id', quizId)
+      .single();
+    
+    if (quizError) throw quizError;
+    
+    // Get questions
+    const { data: questions, error: questionsError } = await supabase
+      .from('quiz_questions')
+      .select('*')
+      .eq('quiz_id', quizId)
+      .order('display_order', { ascending: true })
+      .order('id', { ascending: true });
+    
+    if (questionsError) throw questionsError;
+    
+    // If there's an in-progress attempt, return saved answers
+    let savedAnswers = null;
+    if (existingAttempt && existingAttempt.status === 'in-progress') {
+      savedAnswers = existingAttempt.answers;
+    }
+    
+    res.json({
+      success: true,
+      quiz: quiz,
+      questions: questions || [],
+      saved_answers: savedAnswers,
+      attempt_id: existingAttempt?.id || null
+    });
+    
+  } catch (error) {
+    console.error('Error fetching quiz questions:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch quiz questions',
+      error: error.message
+    });
+  }
+});
+
+// Start a quiz attempt
+app.post('/api/quiz/:quizId/start', authenticateToken, async (req, res) => {
+  try {
+    const { quizId } = req.params;
+    
+    console.log(`🎯 Starting quiz attempt for learner: ${req.user.id}, Quiz: ${quizId}`);
+    
+    // Check if there's already an in-progress attempt
+    const { data: existingAttempt, error: checkError } = await supabase
+      .from('quiz_attempts')
+      .select('id')
+      .eq('learner_id', req.user.id)
+      .eq('quiz_id', quizId)
+      .eq('status', 'in-progress')
+      .maybeSingle();
+    
+    if (existingAttempt) {
+      return res.json({
+        success: true,
+        attempt_id: existingAttempt.id,
+        message: 'Resuming existing attempt'
+      });
+    }
+    
+    // Get quiz details for total marks
+    const { data: quiz, error: quizError } = await supabase
+      .from('quizzes')
+      .select('subject, total_marks')
+      .eq('id', quizId)
+      .single();
+    
+    if (quizError) throw quizError;
+    
+    // Create new attempt
+    const { data: attempt, error } = await supabase
+      .from('quiz_attempts')
+      .insert({
+        learner_id: req.user.id,
+        quiz_id: parseInt(quizId),
+        subject: quiz.subject,
+        total_marks: quiz.total_marks || 0,
+        status: 'in-progress',
+        started_at: new Date().toISOString()
+      })
+      .select()
+      .single();
+    
+    if (error) throw error;
+    
+    res.json({
+      success: true,
+      attempt_id: attempt.id,
+      message: 'Quiz started successfully'
+    });
+    
+  } catch (error) {
+    console.error('Error starting quiz:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to start quiz',
+      error: error.message
+    });
+  }
+});
+
+// Submit quiz answers (auto-graded for objective questions)
+app.post('/api/quiz/:quizId/submit', authenticateToken, async (req, res) => {
+  try {
+    const { quizId } = req.params;
+    const { answers, time_taken } = req.body;
+    
+    console.log(`📝 Submitting quiz: ${quizId} for learner: ${req.user.id}`);
+    
+    // Get the attempt
+    const { data: attempt, error: attemptError } = await supabase
+      .from('quiz_attempts')
+      .select('id, status')
+      .eq('learner_id', req.user.id)
+      .eq('quiz_id', quizId)
+      .eq('status', 'in-progress')
+      .single();
+    
+    if (attemptError || !attempt) {
+      return res.status(404).json({
+        success: false,
+        message: 'No active quiz attempt found'
+      });
+    }
+    
+    // Get quiz questions for grading
+    const { data: questions, error: questionsError } = await supabase
+      .from('quiz_questions')
+      .select('*')
+      .eq('quiz_id', quizId);
+    
+    if (questionsError) throw questionsError;
+    
+    // Calculate score
+    let totalScore = 0;
+    let totalPossible = 0;
+    const gradedAnswers = [];
+    
+    questions.forEach((question, index) => {
+      const userAnswer = answers[index];
+      const isCorrect = userAnswer === question.correct_answer;
+      const marksObtained = isCorrect ? question.marks : 0;
+      
+      totalScore += marksObtained;
+      totalPossible += question.marks;
+      
+      gradedAnswers.push({
+        question_id: question.id,
+        question_text: question.question_text,
+        selected_answer: userAnswer,
+        selected_answer_text: question.options[userAnswer],
+        is_correct: isCorrect,
+        marks_obtained: marksObtained,
+        correct_answer: question.correct_answer,
+        correct_answer_text: question.options[question.correct_answer],
+        explanation: question.explanation
+      });
+    });
+    
+    const percentage = totalPossible > 0 ? (totalScore / totalPossible) * 100 : 0;
+    
+    // Update attempt
+    const { data: updatedAttempt, error: updateError } = await supabase
+      .from('quiz_attempts')
+      .update({
+        answers: gradedAnswers,
+        score: totalScore,
+        percentage: percentage,
+        status: 'completed',
+        completed_at: new Date().toISOString(),
+        time_taken: time_taken || null
+      })
+      .eq('id', attempt.id)
+      .select()
+      .single();
+    
+    if (updateError) throw updateError;
+    
+    // Create a report card entry for the quiz score
+    const { data: learner, error: learnerError } = await supabase
+      .from('learners')
+      .select('class_id, form')
+      .eq('id', req.user.id)
+      .single();
+    
+    if (!learnerError && learner) {
+      // Get quiz subject
+      const quizSubject = questions[0]?.subject || 'General';
+      
+      // Check if a report already exists for this subject/term
+      const { data: existingReport } = await supabase
+        .from('reports')
+        .select('id, subjects')
+        .eq('learner_id', req.user.id)
+        .eq('term', `Quiz: ${quizId}`)
+        .maybeSingle();
+      
+      if (existingReport) {
+        // Update existing report
+        let subjects = existingReport.subjects;
+        if (typeof subjects === 'string') {
+          subjects = JSON.parse(subjects);
+        }
+        
+        const subjectIndex = subjects.findIndex(s => s.name === quizSubject);
+        if (subjectIndex !== -1) {
+          subjects[subjectIndex].score = Math.round(percentage);
+          subjects[subjectIndex].quiz_score = totalScore;
+          subjects[subjectIndex].quiz_total = totalPossible;
+        } else {
+          subjects.push({
+            name: quizSubject,
+            score: Math.round(percentage),
+            quiz_score: totalScore,
+            quiz_total: totalPossible,
+            type: 'quiz'
+          });
+        }
+        
+        await supabase
+          .from('reports')
+          .update({ subjects: subjects, updated_at: new Date().toISOString() })
+          .eq('id', existingReport.id);
+      } else {
+        // Create new report entry
+        await supabase
+          .from('reports')
+          .insert({
+            learner_id: req.user.id,
+            class_id: learner.class_id,
+            term: `Quiz: ${quizId}`,
+            form: learner.form,
+            subjects: [{
+              name: quizSubject,
+              score: Math.round(percentage),
+              quiz_score: totalScore,
+              quiz_total: totalPossible,
+              type: 'quiz'
+            }],
+            comment: `Auto-generated from quiz submission. Score: ${totalScore}/${totalPossible} (${Math.round(percentage)}%)`,
+            generated_by: 'system',
+            generated_date: new Date().toISOString()
+          });
+      }
+    }
+    
+    res.json({
+      success: true,
+      score: totalScore,
+      total_possible: totalPossible,
+      percentage: percentage,
+      answers: gradedAnswers,
+      message: 'Quiz submitted successfully!'
+    });
+    
+  } catch (error) {
+    console.error('Error submitting quiz:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to submit quiz',
+      error: error.message
+    });
+  }
+});
+
+// Get learner's quiz history
+app.get('/api/quiz/history', authenticateToken, async (req, res) => {
+  try {
+    console.log(`📊 Fetching quiz history for learner: ${req.user.id}`);
+    
+    const { data: attempts, error } = await supabase
+      .from('quiz_attempts')
+      .select(`
+        *,
+        quiz:quiz_id(id, title, subject)
+      `)
+      .eq('learner_id', req.user.id)
+      .eq('status', 'completed')
+      .order('completed_at', { ascending: false });
+    
+    if (error) throw error;
+    
+    res.json({
+      success: true,
+      attempts: attempts || []
+    });
+    
+  } catch (error) {
+    console.error('Error fetching quiz history:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch quiz history',
+      error: error.message
+    });
+  }
+});
+
+// ============================================
+// ADMIN QUIZ MANAGEMENT ENDPOINTS
+// ============================================
+
+// Get all quizzes (admin)
+app.get('/api/admin/quizzes', authenticateToken, authenticateAdmin, async (req, res) => {
+  try {
+    const { data: quizzes, error } = await supabase
+      .from('quizzes')
+      .select(`
+        *,
+        questions:quiz_questions(count),
+        attempts:quiz_attempts(count)
+      `)
+      .order('created_at', { ascending: false });
+    
+    if (error) throw error;
+    
+    const formattedQuizzes = (quizzes || []).map(quiz => ({
+      ...quiz,
+      question_count: parseInt(quiz.questions?.[0]?.count || 0),
+      attempt_count: parseInt(quiz.attempts?.[0]?.count || 0)
+    }));
+    
+    res.json({
+      success: true,
+      quizzes: formattedQuizzes
+    });
+    
+  } catch (error) {
+    console.error('Error fetching admin quizzes:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch quizzes',
+      error: error.message
+    });
+  }
+});
+
+// Create a new quiz (admin)
+app.post('/api/admin/quizzes', authenticateToken, authenticateAdmin, async (req, res) => {
+  try {
+    const { subject, title, description, duration, total_marks, is_active } = req.body;
+    
+    console.log('📝 Creating new quiz:', { subject, title });
+    
+    if (!subject || !title) {
+      return res.status(400).json({
+        success: false,
+        message: 'Subject and title are required'
+      });
+    }
+    
+    const { data: quiz, error } = await supabase
+      .from('quizzes')
+      .insert({
+        subject: subject,
+        title: title,
+        description: description || null,
+        duration: duration || 30,
+        total_marks: total_marks || 0,
+        is_active: is_active !== false,
+        created_by: req.user.id,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      })
+      .select()
+      .single();
+    
+    if (error) throw error;
+    
+    await logAdminAction(
+      req.user.id,
+      'CREATE_QUIZ',
+      `Created quiz: ${title} (${subject})`,
+      req.ip
+    );
+    
+    res.json({
+      success: true,
+      message: 'Quiz created successfully',
+      quiz: quiz
+    });
+    
+  } catch (error) {
+    console.error('Error creating quiz:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to create quiz',
+      error: error.message
+    });
+  }
+});
+
+// Update quiz (admin)
+app.put('/api/admin/quizzes/:quizId', authenticateToken, authenticateAdmin, async (req, res) => {
+  try {
+    const { quizId } = req.params;
+    const { subject, title, description, duration, total_marks, is_active } = req.body;
+    
+    const updateData = {};
+    if (subject) updateData.subject = subject;
+    if (title) updateData.title = title;
+    if (description !== undefined) updateData.description = description;
+    if (duration) updateData.duration = duration;
+    if (total_marks !== undefined) updateData.total_marks = total_marks;
+    if (is_active !== undefined) updateData.is_active = is_active;
+    updateData.updated_at = new Date().toISOString();
+    
+    const { data: quiz, error } = await supabase
+      .from('quizzes')
+      .update(updateData)
+      .eq('id', quizId)
+      .select()
+      .single();
+    
+    if (error) {
+      if (error.code === 'PGRST116') {
+        return res.status(404).json({
+          success: false,
+          message: 'Quiz not found'
+        });
+      }
+      throw error;
+    }
+    
+    await logAdminAction(
+      req.user.id,
+      'UPDATE_QUIZ',
+      `Updated quiz: ${quiz.title}`,
+      req.ip
+    );
+    
+    res.json({
+      success: true,
+      message: 'Quiz updated successfully',
+      quiz: quiz
+    });
+    
+  } catch (error) {
+    console.error('Error updating quiz:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update quiz',
+      error: error.message
+    });
+  }
+});
+
+// Delete quiz (admin)
+app.delete('/api/admin/quizzes/:quizId', authenticateToken, authenticateAdmin, async (req, res) => {
+  try {
+    const { quizId } = req.params;
+    
+    const { data: quiz, error } = await supabase
+      .from('quizzes')
+      .delete()
+      .eq('id', quizId)
+      .select()
+      .single();
+    
+    if (error) {
+      if (error.code === 'PGRST116') {
+        return res.status(404).json({
+          success: false,
+          message: 'Quiz not found'
+        });
+      }
+      throw error;
+    }
+    
+    await logAdminAction(
+      req.user.id,
+      'DELETE_QUIZ',
+      `Deleted quiz: ${quiz.title}`,
+      req.ip
+    );
+    
+    res.json({
+      success: true,
+      message: 'Quiz deleted successfully'
+    });
+    
+  } catch (error) {
+    console.error('Error deleting quiz:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to delete quiz',
+      error: error.message
+    });
+  }
+});
+
+// Add question to quiz (admin)
+app.post('/api/admin/quizzes/:quizId/questions', authenticateToken, authenticateAdmin, async (req, res) => {
+  try {
+    const { quizId } = req.params;
+    const { question_text, options, correct_answer, explanation, marks, display_order } = req.body;
+    
+    console.log(`📝 Adding question to quiz ${quizId}`);
+    
+    if (!question_text || !options || correct_answer === undefined) {
+      return res.status(400).json({
+        success: false,
+        message: 'Question text, options, and correct answer are required'
+      });
+    }
+    
+    let finalDisplayOrder = display_order;
+    if (!finalDisplayOrder) {
+      const { data: maxOrder, error: orderError } = await supabase
+        .from('quiz_questions')
+        .select('display_order')
+        .eq('quiz_id', quizId)
+        .order('display_order', { ascending: false })
+        .limit(1);
+      
+      finalDisplayOrder = (maxOrder && maxOrder[0]?.display_order || 0) + 1;
+    }
+    
+    const { data: question, error } = await supabase
+      .from('quiz_questions')
+      .insert({
+        quiz_id: parseInt(quizId),
+        question_text: question_text,
+        options: options,
+        correct_answer: correct_answer,
+        explanation: explanation || null,
+        marks: marks || 1,
+        display_order: finalDisplayOrder,
+        created_at: new Date().toISOString()
+      })
+      .select()
+      .single();
+    
+    if (error) throw error;
+    
+    // Update quiz total marks
+    const { data: questions, error: questionsError } = await supabase
+      .from('quiz_questions')
+      .select('marks')
+      .eq('quiz_id', quizId);
+    
+    if (!questionsError && questions) {
+      const totalMarks = questions.reduce((sum, q) => sum + (q.marks || 1), 0);
+      await supabase
+        .from('quizzes')
+        .update({ total_marks: totalMarks, updated_at: new Date().toISOString() })
+        .eq('id', quizId);
+    }
+    
+    await logAdminAction(
+      req.user.id,
+      'ADD_QUESTION',
+      `Added question to quiz ID ${quizId}`,
+      req.ip
+    );
+    
+    res.json({
+      success: true,
+      message: 'Question added successfully',
+      question: question
+    });
+    
+  } catch (error) {
+    console.error('Error adding question:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to add question',
+      error: error.message
+    });
+  }
+});
+
+// Update question (admin)
+app.put('/api/admin/questions/:questionId', authenticateToken, authenticateAdmin, async (req, res) => {
+  try {
+    const { questionId } = req.params;
+    const { question_text, options, correct_answer, explanation, marks, display_order } = req.body;
+    
+    const updateData = {};
+    if (question_text) updateData.question_text = question_text;
+    if (options) updateData.options = options;
+    if (correct_answer !== undefined) updateData.correct_answer = correct_answer;
+    if (explanation !== undefined) updateData.explanation = explanation;
+    if (marks) updateData.marks = marks;
+    if (display_order !== undefined) updateData.display_order = display_order;
+    
+    const { data: question, error } = await supabase
+      .from('quiz_questions')
+      .update(updateData)
+      .eq('id', questionId)
+      .select()
+      .single();
+    
+    if (error) {
+      if (error.code === 'PGRST116') {
+        return res.status(404).json({
+          success: false,
+          message: 'Question not found'
+        });
+      }
+      throw error;
+    }
+    
+    // Update quiz total marks
+    const { data: questions, error: questionsError } = await supabase
+      .from('quiz_questions')
+      .select('marks')
+      .eq('quiz_id', question.quiz_id);
+    
+    if (!questionsError && questions) {
+      const totalMarks = questions.reduce((sum, q) => sum + (q.marks || 1), 0);
+      await supabase
+        .from('quizzes')
+        .update({ total_marks: totalMarks, updated_at: new Date().toISOString() })
+        .eq('id', question.quiz_id);
+    }
+    
+    res.json({
+      success: true,
+      message: 'Question updated successfully',
+      question: question
+    });
+    
+  } catch (error) {
+    console.error('Error updating question:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update question',
+      error: error.message
+    });
+  }
+});
+
+// Delete question (admin)
+app.delete('/api/admin/questions/:questionId', authenticateToken, authenticateAdmin, async (req, res) => {
+  try {
+    const { questionId } = req.params;
+    
+    const { data: question, error } = await supabase
+      .from('quiz_questions')
+      .delete()
+      .eq('id', questionId)
+      .select()
+      .single();
+    
+    if (error) {
+      if (error.code === 'PGRST116') {
+        return res.status(404).json({
+          success: false,
+          message: 'Question not found'
+        });
+      }
+      throw error;
+    }
+    
+    // Update quiz total marks
+    const { data: questions, error: questionsError } = await supabase
+      .from('quiz_questions')
+      .select('marks')
+      .eq('quiz_id', question.quiz_id);
+    
+    if (!questionsError && questions) {
+      const totalMarks = questions.reduce((sum, q) => sum + (q.marks || 1), 0);
+      await supabase
+        .from('quizzes')
+        .update({ total_marks: totalMarks, updated_at: new Date().toISOString() })
+        .eq('id', question.quiz_id);
+    }
+    
+    await logAdminAction(
+      req.user.id,
+      'DELETE_QUESTION',
+      `Deleted question from quiz ID ${question.quiz_id}`,
+      req.ip
+    );
+    
+    res.json({
+      success: true,
+      message: 'Question deleted successfully'
+    });
+    
+  } catch (error) {
+    console.error('Error deleting question:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to delete question',
+      error: error.message
+    });
+  }
+});
+// ============================================
 // START SERVER
 // ============================================
 
