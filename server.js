@@ -1505,7 +1505,8 @@ app.put('/api/admin/subjects/:subjectId', authenticateToken, authenticateAdmin, 
     console.error('Error updating subject:', err);
     res.status(500).json({
       success: false,
-      message: 'Database error: ' + err.message
+      message: 'Database error',
+      error: err.message
     });
   }
 });
@@ -1560,7 +1561,8 @@ app.delete('/api/admin/subjects/:subjectId', authenticateToken, authenticateAdmi
     console.error('Error deleting subject:', err);
     res.status(500).json({
       success: false,
-      message: 'Database error: ' + err.message
+      message: 'Database error',
+      error: err.message
     });
   }
 });
@@ -3017,31 +3019,6 @@ app.get('/api/debug/learners', async (req, res) => {
 });
 
 // ============================================
-// 404 HANDLER
-// ============================================
-
-app.use((req, res) => {
-  console.log(`❌ Route not found: ${req.method} ${req.path}`);
-  res.status(404).json({ 
-    success: false, 
-    message: `Route not found: ${req.path}`
-  });
-});
-
-// ============================================
-// ERROR HANDLER
-// ============================================
-
-app.use((err, req, res, next) => {
-  console.error('Server error:', err);
-  res.status(500).json({ 
-    success: false, 
-    message: 'Internal server error',
-    error: process.env.NODE_ENV === 'development' ? err.message : undefined
-  });
-});
-
-// ============================================
 // QUIZ SYSTEM API ENDPOINTS
 // ============================================
 
@@ -3816,6 +3793,32 @@ app.delete('/api/admin/questions/:questionId', authenticateToken, authenticateAd
     });
   }
 });
+
+// ============================================
+// 404 HANDLER
+// ============================================
+
+app.use((req, res) => {
+  console.log(`❌ Route not found: ${req.method} ${req.path}`);
+  res.status(404).json({ 
+    success: false, 
+    message: `Route not found: ${req.path}`
+  });
+});
+
+// ============================================
+// ERROR HANDLER
+// ============================================
+
+app.use((err, req, res, next) => {
+  console.error('Server error:', err);
+  res.status(500).json({ 
+    success: false, 
+    message: 'Internal server error',
+    error: process.env.NODE_ENV === 'development' ? err.message : undefined
+  });
+});
+
 // ============================================
 // START SERVER
 // ============================================
@@ -3878,6 +3881,20 @@ app.listen(PORT, () => {
   console.log('   GET    /api/learner/attendance');
   console.log('   GET    /api/learner/attendance-stats');
   console.log('   GET    /api/learner/dashboard/stats');
+  
+  console.log('\n📋 Quiz API Endpoints:');
+  console.log('   GET    /api/quiz/quizzes');
+  console.log('   GET    /api/quiz/:quizId/questions');
+  console.log('   POST   /api/quiz/:quizId/start');
+  console.log('   POST   /api/quiz/:quizId/submit');
+  console.log('   GET    /api/quiz/history');
+  console.log('   GET    /api/admin/quizzes');
+  console.log('   POST   /api/admin/quizzes');
+  console.log('   PUT    /api/admin/quizzes/:quizId');
+  console.log('   DELETE /api/admin/quizzes/:quizId');
+  console.log('   POST   /api/admin/quizzes/:quizId/questions');
+  console.log('   PUT    /api/admin/questions/:questionId');
+  console.log('   DELETE /api/admin/questions/:questionId');
   console.log('='.repeat(60));
 });
 
