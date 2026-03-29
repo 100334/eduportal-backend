@@ -412,16 +412,18 @@ router.get('/stats', async (req, res) => {
     }
 });
 
+// ... existing Teacher & Learner routes ...
+
 // ============ QUIZ & QUESTION MANAGEMENT ============
 
-// POST route to add a question
+// 1. POST: Add a new question to a quiz
 router.post('/quizzes/:quizId/questions', async (req, res) => {
     const { quizId } = req.params;
     const supabase = req.app.locals.supabase;
 
     try {
         const { data, error } = await supabase
-            .from('quiz_questions') // <--- Changed from 'questions' to 'quiz_questions'
+            .from('quiz_questions') // Double-check this table name in Supabase!
             .insert([{
                 quiz_id: quizId,
                 question_text: req.body.question_text,
@@ -433,16 +435,52 @@ router.post('/quizzes/:quizId/questions', async (req, res) => {
             .select()
             .single();
 
-        if (error) {
-            console.error('Supabase Insert Error:', error.message);
-            return res.status(400).json({ success: false, message: error.message });
-        }
-
+        if (error) throw error;
         res.status(201).json({ success: true, data });
     } catch (err) {
-        console.error('Server Crash:', err.message);
-        res.status(500).json({ success: false, message: 'Server error: ' + err.message });
+        console.error('Insert Error:', err.message);
+        res.status(500).json({ success: false, message: err.message });
     }
 });
+
+// 2. GET: Fetch all questions for a quiz
+router.get('/quizzes/:quizId/questions', async (req, res) => {
+    const { quizId } = req.params;
+    const supabase = req.app.locals.supabase;
+
+    try {
+        const { data, error } = await supabase
+            .from('quiz_questions')
+            .select('*')
+            .eq('quiz_id', quizId)
+            .order('created_at', { ascending: true });
+
+        if (error) throw error;
+        res.json({ success: true, questions: data || [] });
+    } catch (err) {
+        res.status(500).json({ success: false, message: err.message });
+    }
+});
+
+// 3. DELETE: Remove a question
+router.delete('/questions/:questionId', async (req, res) => {
+    const { questionId } = req.params;
+    const supabase = req.app.locals.supabase;
+
+    try {
+        const { error } = await supabase
+            .from('quiz_questions')
+            .delete()
+            .eq('id', questionId);
+
+        if (error) throw error;
+        res.json({ success: true, message: 'Question deleted' });
+    } catch (err) {
+        res.status(500).json({ success: false, message: err.message });
+    }
+});
+
+// THIS MUST BE THE VERY LAST LINE OF THE FILE
+module.exports = router;
 
 module.exports = router;
