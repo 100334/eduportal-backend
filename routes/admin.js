@@ -172,6 +172,32 @@ router.post('/teachers', async (req, res) => {
     }
 });
 
+// Get all questions for a specific quiz
+router.get('/quizzes/:quizId/questions', async (req, res) => {
+    const { quizId } = req.params;
+    const supabase = req.app.locals.supabase;
+
+    try {
+        const { data, error } = await supabase
+            .from('questions')
+            .select('*')
+            .eq('quiz_id', quizId)
+            .order('created_at', { ascending: true });
+
+        if (error) throw error;
+
+        res.json({
+            success: true,
+            questions: data || []
+        });
+    } catch (error) {
+        console.error('Error fetching questions:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: 'Failed to fetch questions' 
+        });
+    }
+});
 // ============ LEARNER MANAGEMENT ============
 
 // Get all learners
