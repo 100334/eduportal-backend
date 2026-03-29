@@ -480,7 +480,4 @@ router.delete('/questions/:questionId', async (req, res) => {
     }
 });
 
-// THIS MUST BE THE VERY LAST LINE OF THE FILE
-module.exports = router;
-
 module.exports = router;
