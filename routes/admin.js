@@ -422,27 +422,44 @@ router.post('/quizzes/:quizId/questions', async (req, res) => {
     const supabase = req.app.locals.supabase;
 
     try {
+        // Log this to your terminal to verify what React is actually sending
+        console.log("Data from frontend:", req.body);
+
+        // MAPPING: We take what React sends and rename it for the DB
+        const { 
+            question_text, 
+            options, 
+            correct_answer, // Frontend name
+            marks,          // Frontend name
+            explanation 
+        } = req.body || {};
+
+        // Safety check: If question_text is missing, stop the crash
+        if (!question_text) {
+            return res.status(400).json({ error: "question_text is required" });
+        }
+
         const { data, error } = await supabase
-            .from('quiz_questions') // Double-check this table name in Supabase!
+            .from('quiz_questions')
             .insert([{
                 quiz_id: quizId,
-                question_text: req.body.question_text,
-                options: req.body.options,
-                correct_option: req.body.correct_option,
-                points: req.body.points || 1,
-                explanation: req.body.explanation
+                question_text: question_text,
+                options: options,
+                correct_option: correct_answer, // Map correct_answer -> correct_option
+                points: marks || 1,             // Map marks -> points
+                explanation: explanation || ""
             }])
             .select()
             .single();
 
         if (error) throw error;
+
         res.status(201).json({ success: true, data });
     } catch (err) {
-        console.error('Insert Error:', err.message);
-        res.status(500).json({ success: false, message: err.message });
+        console.error("Route Error:", err.message);
+        res.status(500).json({ error: err.message });
     }
 });
-
 // 2. GET: Fetch all questions for a quiz
 router.get('/quizzes/:quizId/questions', async (req, res) => {
     const { quizId } = req.params;
