@@ -6,7 +6,7 @@ const compression = require('compression');
 const rateLimit = require('express-rate-limit');
 const dotenv = require('dotenv');
 const { createClient } = require('@supabase/supabase-js');
-const adminRoutes = require('./admin');
+const adminRoutes = require('./routes/admin');
 
 // Load environment variables
 dotenv.config();
