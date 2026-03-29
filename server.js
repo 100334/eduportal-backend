@@ -3542,101 +3542,39 @@ app.delete('/api/admin/quizzes/:quizId', authenticateToken, authenticateAdmin, a
 
 // Add question to quiz (admin)
 // Create a new quiz (admin) - WITH UUID SUPPORT
-app.post('/api/admin/quizzes', authenticateToken, authenticateAdmin, async (req, res) => {
+app.post('/api/admin/quizzes', authenticateToken, async (req, res) => {
   try {
-    const { subject_id, title, description, duration, total_marks, is_active } = req.body;
-    
-    console.log('📝 Creating new quiz:', { subject_id, title, duration });
-    
-    if (!subject_id || !title) {
-      return res.status(400).json({
-        success: false,
-        message: 'Subject ID and title are required'
-      });
-    }
-    
-    // Verify subject exists (subject_id is UUID)
-    const { data: subject, error: subjectError } = await supabase
-      .from('subjects')
-      .select('id, name')
-      .eq('id', subject_id)  // subject_id is now UUID
-      .eq('status', 'Active')
-      .single();
-    
-    if (subjectError || !subject) {
-      console.error('Subject error:', subjectError);
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid subject selected'
-      });
-    }
-    
-    const quizData = {
-      subject_id: subject_id,  // UUID type
-      title: title.trim(),
-      description: description || null,
-      duration: duration || 30,
-      total_marks: total_marks || 0,
-      is_active: is_active !== false,
-      created_by: req.user.id,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString()
-    };
-    
-    console.log('Inserting quiz with data:', quizData);
-    
-    const { data: quiz, error } = await supabase
+    const { title, description, duration, subject_id, total_marks, is_active } = req.body;
+
+    // DO NOT manually include an 'id' here. 
+    // Let the database use the 'gen_random_uuid()' default we set up.
+    const { data, error } = await req.app.locals.supabase
       .from('quizzes')
-      .insert(quizData)
-      .select(`
-        *,
-        subject:subject_id(id, name)
-      `)
+      .insert([
+        {
+          title,
+          description,
+          duration,
+          subject_id, // This must be a valid UUID string
+          total_marks,
+          is_active: is_active !== undefined ? is_active : true,
+          created_at: new Date().toISOString()
+        }
+      ])
+      .select()
       .single();
-    
+
     if (error) {
-      console.error('Supabase insert error:', error);
-      return res.status(500).json({
-        success: false,
-        message: 'Database error: ' + error.message,
-        details: error
-      });
+      console.error('❌ Insert Error:', error.message);
+      return res.status(400).json({ success: false, message: error.message });
     }
-    
-    if (!quiz) {
-      return res.status(500).json({
-        success: false,
-        message: 'Failed to create quiz - no data returned'
-      });
-    }
-    
-    await logAdminAction(
-      req.user.id,
-      'CREATE_QUIZ',
-      `Created quiz: ${title} for subject: ${subject.name}`,
-      req.ip
-    );
-    
-    console.log('✅ Quiz created successfully:', quiz.id);
-    
-    res.json({
-      success: true,
-      message: 'Quiz created successfully',
-      quiz: {
-        ...quiz,
-        subject_name: quiz.subject?.name
-      }
-    });
-    
-  } catch (error) {
-    console.error('Error creating quiz:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to create quiz: ' + error.message
-    });
+
+    res.json({ success: true, quiz: data });
+  } catch (err) {
+    console.error('❌ Server Error:', err.message);
+    res.status(500).json({ success: false, message: 'Internal server error' });
   }
 });
-
 // Get available subjects for quiz creation
 // ============================================
 // QUIZ SUBJECTS ENDPOINT
