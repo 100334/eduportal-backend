@@ -6,6 +6,7 @@ const compression = require('compression');
 const rateLimit = require('express-rate-limit');
 const dotenv = require('dotenv');
 const { createClient } = require('@supabase/supabase-js');
+const adminRoutes = require('./admin');
 
 // Load environment variables
 dotenv.config();
@@ -81,7 +82,7 @@ const corsOptions = {
   optionsSuccessStatus: 200
 };
 app.use(cors(corsOptions));
-
+app.use('/api/admin', adminRoutes);
 // Compression middleware
 app.use(compression());
 
