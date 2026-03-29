@@ -14,6 +14,11 @@ dotenv.config();
 // Initialize Express
 const app = express();
 
+// Body parsing middleware
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+
 // Trust proxy - Required for Render
 app.set('trust proxy', 1);
 
@@ -107,9 +112,6 @@ const authLimiter = rateLimit({
 app.use('/api', apiLimiter);
 app.use('/api/auth', authLimiter);
 
-// Body parsing middleware
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 
 // Logging middleware
