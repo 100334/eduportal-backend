@@ -3085,15 +3085,14 @@ app.get('/api/admin/quizzes', authenticateToken, authenticateAdmin, async (req, 
   }
 });
 
-// Create a new quiz (admin)
-// Create a new quiz (admin) - WITH BETTER ERROR LOGGING
-
+// Create a new quiz (admin) - COMPLETELY FIXED
 app.post('/api/admin/quizzes', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
     const { subject_id, title, description, duration, total_marks, is_active } = req.body;
     
     console.log('📝 Creating new quiz:', { subject_id, title, duration });
     
+    // Validation
     if (!subject_id || !title) {
       return res.status(400).json({
         success: false,
@@ -3106,7 +3105,6 @@ app.post('/api/admin/quizzes', authenticateToken, authenticateAdmin, async (req,
       .from('subjects')
       .select('id, name')
       .eq('id', subject_id)
-      .eq('status', 'Active')
       .single();
     
     if (subjectError || !subject) {
@@ -3117,7 +3115,7 @@ app.post('/api/admin/quizzes', authenticateToken, authenticateAdmin, async (req,
       });
     }
     
-    // DO NOT include an 'id' field - let the database auto-generate BIGSERIAL
+    // Prepare quiz data - NO ID FIELD!
     const quizData = {
       subject_id: subject_id,
       title: title.trim(),
@@ -3130,15 +3128,13 @@ app.post('/api/admin/quizzes', authenticateToken, authenticateAdmin, async (req,
       updated_at: new Date().toISOString()
     };
     
-    console.log('Inserting quiz data:', quizData);
+    console.log('Inserting quiz data (NO ID field):', quizData);
     
+    // Insert - let Supabase generate the BIGSERIAL ID
     const { data: quiz, error } = await supabase
       .from('quizzes')
       .insert(quizData)
-      .select(`
-        *,
-        subject:subject_id(id, name)
-      `)
+      .select()
       .single();
     
     if (error) {
@@ -3150,22 +3146,29 @@ app.post('/api/admin/quizzes', authenticateToken, authenticateAdmin, async (req,
       });
     }
     
+    console.log('✅ Quiz created successfully. ID:', quiz.id, 'Type:', typeof quiz.id);
+    
+    // Fetch subject name for response
+    const { data: subjectData } = await supabase
+      .from('subjects')
+      .select('name')
+      .eq('id', subject_id)
+      .single();
+    
     await logAdminAction(
       req.user.id,
       'CREATE_QUIZ',
-      `Created quiz: ${title} for subject: ${subject.name}`,
+      `Created quiz: ${title} for subject: ${subjectData?.name || 'Unknown'}`,
       req.ip
     );
-    
-    console.log('✅ Quiz created successfully. ID:', quiz.id, 'Type:', typeof quiz.id);
     
     res.json({
       success: true,
       message: 'Quiz created successfully',
       quiz: {
         ...quiz,
-        subject_name: quiz.subject?.name,
-        id: parseInt(quiz.id) // Ensure it's a number
+        subject_name: subjectData?.name,
+        id: quiz.id // This will be a number (BIGSERIAL)
       }
     });
     
@@ -3288,6 +3291,16 @@ app.post('/api/admin/quizzes/:quizId/questions', authenticateToken, authenticate
     
     console.log(`📝 Adding question to quiz ${quizId}`);
     
+    // Convert to integer - CRITICAL!
+    const quizIdInt = parseInt(quizId);
+    if (isNaN(quizIdInt)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid quiz ID - must be a number'
+      });
+    }
+    
+    // Validation
     if (!question_text || !options || correct_answer === undefined) {
       return res.status(400).json({
         success: false,
@@ -3295,33 +3308,27 @@ app.post('/api/admin/quizzes/:quizId/questions', authenticateToken, authenticate
       });
     }
     
-    // Convert quizId to integer (BIGINT)
-    const quizIdInt = parseInt(quizId);
-    if (isNaN(quizIdInt)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid quiz ID'
-      });
-    }
-    
     // Verify quiz exists with integer ID
-    const { data: quizExists, error: quizError } = await supabase
+    const { data: quiz, error: quizError } = await supabase
       .from('quizzes')
-      .select('id')
+      .select('id, title')
       .eq('id', quizIdInt)
       .single();
     
-    if (quizError || !quizExists) {
+    if (quizError || !quiz) {
       console.error('Quiz not found:', quizError);
       return res.status(404).json({
         success: false,
-        message: 'Quiz not found'
+        message: `Quiz with ID ${quizIdInt} not found`
       });
     }
     
+    console.log('✅ Found quiz:', quiz);
+    
+    // Get display order
     let finalDisplayOrder = display_order;
     if (!finalDisplayOrder) {
-      const { data: maxOrder, error: orderError } = await supabase
+      const { data: maxOrder } = await supabase
         .from('quiz_questions')
         .select('display_order')
         .eq('quiz_id', quizIdInt)
@@ -3331,8 +3338,9 @@ app.post('/api/admin/quizzes/:quizId/questions', authenticateToken, authenticate
       finalDisplayOrder = (maxOrder && maxOrder[0]?.display_order || 0) + 1;
     }
     
+    // Insert question with integer quiz_id
     const questionData = {
-      quiz_id: quizIdInt, // Use integer
+      quiz_id: quizIdInt, // This MUST be an integer
       question_text: question_text,
       options: options,
       correct_answer: correct_answer,
@@ -3341,6 +3349,8 @@ app.post('/api/admin/quizzes/:quizId/questions', authenticateToken, authenticate
       display_order: finalDisplayOrder,
       created_at: new Date().toISOString()
     };
+    
+    console.log('Inserting question with quiz_id:', quizIdInt, 'Type:', typeof quizIdInt);
     
     const { data: question, error } = await supabase
       .from('quiz_questions')
@@ -3357,12 +3367,12 @@ app.post('/api/admin/quizzes/:quizId/questions', authenticateToken, authenticate
     }
     
     // Update quiz total marks
-    const { data: questions, error: questionsError } = await supabase
+    const { data: questions } = await supabase
       .from('quiz_questions')
       .select('marks')
       .eq('quiz_id', quizIdInt);
     
-    if (!questionsError && questions && questions.length > 0) {
+    if (questions && questions.length > 0) {
       const totalMarks = questions.reduce((sum, q) => sum + (q.marks || 1), 0);
       await supabase
         .from('quizzes')
@@ -3370,12 +3380,7 @@ app.post('/api/admin/quizzes/:quizId/questions', authenticateToken, authenticate
         .eq('id', quizIdInt);
     }
     
-    await logAdminAction(
-      req.user.id,
-      'ADD_QUESTION',
-      `Added question to quiz ID ${quizIdInt}`,
-      req.ip
-    );
+    console.log('✅ Question added successfully');
     
     res.json({
       success: true,
