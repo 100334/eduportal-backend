@@ -2992,7 +2992,7 @@ app.get('/api/debug/learners', async (req, res) => {
 });
 
 // ============================================
-// QUIZ SYSTEM ENDPOINTS (COMPLETE - NO DUPLICATES)
+// COMPLETE QUIZ SYSTEM ENDPOINTS
 // ============================================
 
 // Get available subjects for quiz creation
@@ -3078,9 +3078,9 @@ app.get('/api/admin/quizzes', authenticateToken, authenticateAdmin, async (req, 
 // Create a new quiz (admin)
 app.post('/api/admin/quizzes', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
-    const { subject_id, title, description, duration, total_marks, is_active } = req.body;
+    const { subject_id, title, description, duration, total_marks, is_active, target_form } = req.body;
     
-    console.log('📝 Creating new quiz:', { subject_id, title, duration });
+    console.log('📝 Creating new quiz:', { subject_id, title, duration, target_form });
     
     if (!subject_id) {
       return res.status(400).json({ 
@@ -3102,15 +3102,7 @@ app.post('/api/admin/quizzes', authenticateToken, authenticateAdmin, async (req,
       .eq('id', subject_id)
       .maybeSingle();
     
-    if (subjectError) {
-      console.error('Subject check error:', subjectError);
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Error checking subject: ' + subjectError.message 
-      });
-    }
-    
-    if (!subject) {
+    if (subjectError || !subject) {
       return res.status(400).json({ 
         success: false, 
         message: 'Invalid subject selected' 
@@ -3126,6 +3118,7 @@ app.post('/api/admin/quizzes', authenticateToken, authenticateAdmin, async (req,
         duration: parseInt(duration) || 30,
         total_marks: parseInt(total_marks) || 0,
         is_active: is_active !== false,
+        target_form: target_form || 'All',
         created_by: req.user.id,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString()
@@ -3147,7 +3140,7 @@ app.post('/api/admin/quizzes', authenticateToken, authenticateAdmin, async (req,
     await logAdminAction(
       req.user.id,
       'CREATE_QUIZ',
-      `Created quiz: ${title} for subject: ${subject.name}`,
+      `Created quiz: ${title} for subject: ${subject.name} (Target: ${target_form || 'All'})`,
       req.ip
     );
 
@@ -3220,15 +3213,39 @@ app.get('/api/admin/quizzes/:quizId/questions', authenticateToken, authenticateA
 app.post('/api/admin/quizzes/:quizId/questions', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
     const { quizId } = req.params;
-    const { question_text, options, correct_answer, explanation, marks, display_order } = req.body;
+    const { question_text, options, correct_answer, explanation, marks, display_order, question_type, expected_answer } = req.body;
     
-    console.log(`📝 Adding question to quiz: ${quizId}`);
+    console.log(`📝 Adding ${question_type || 'multiple_choice'} question to quiz: ${quizId}`);
 
-    if (!question_text || !options || correct_answer === undefined) {
+    if (!question_text) {
       return res.status(400).json({ 
         success: false, 
-        message: 'Question text, options, and correct answer are required' 
+        message: 'Question text is required' 
       });
+    }
+
+    const qType = question_type || 'multiple_choice';
+    
+    if (qType === 'multiple_choice') {
+      if (!options || !Array.isArray(options) || options.length < 2) {
+        return res.status(400).json({ 
+          success: false, 
+          message: 'Multiple choice questions require at least 2 options' 
+        });
+      }
+      if (correct_answer === undefined || correct_answer === null) {
+        return res.status(400).json({ 
+          success: false, 
+          message: 'Multiple choice questions require a correct answer index' 
+        });
+      }
+    } else if (qType === 'short_answer') {
+      if (!expected_answer || !expected_answer.trim()) {
+        return res.status(400).json({ 
+          success: false, 
+          message: 'Short answer questions require an expected answer' 
+        });
+      }
     }
 
     const { data: quiz, error: quizError } = await supabase
@@ -3258,19 +3275,29 @@ app.post('/api/admin/quizzes/:quizId/questions', authenticateToken, authenticate
 
     const questionMarks = marks || 1;
 
+    const questionData = {
+      quiz_id: quizId,
+      question_text: question_text,
+      question_type: qType,
+      marks: questionMarks,
+      points: questionMarks,
+      display_order: finalDisplayOrder,
+      created_at: new Date().toISOString()
+    };
+
+    if (qType === 'multiple_choice') {
+      questionData.options = options;
+      questionData.correct_answer = correct_answer;
+      questionData.expected_answer = null;
+    } else {
+      questionData.options = null;
+      questionData.correct_answer = null;
+      questionData.expected_answer = expected_answer.trim().toLowerCase();
+    }
+
     const { data: question, error } = await supabase
       .from('quiz_questions')
-      .insert({
-        quiz_id: quizId,
-        question_text: question_text,
-        options: options,
-        correct_answer: correct_answer,
-        explanation: explanation || null,
-        marks: questionMarks,
-        points: questionMarks,
-        display_order: finalDisplayOrder,
-        created_at: new Date().toISOString()
-      })
+      .insert(questionData)
       .select()
       .single();
 
@@ -3307,7 +3334,7 @@ app.post('/api/admin/quizzes/:quizId/questions', authenticateToken, authenticate
     await logAdminAction(
       req.user.id,
       'ADD_QUESTION',
-      `Added question to quiz ID ${quizId}`,
+      `Added ${qType} question to quiz ID ${quizId}`,
       req.ip
     );
 
@@ -3329,7 +3356,7 @@ app.post('/api/admin/quizzes/:quizId/questions', authenticateToken, authenticate
 app.put('/api/admin/quizzes/:quizId', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
     const { quizId } = req.params;
-    const { subject_id, title, description, duration, total_marks, is_active } = req.body;
+    const { subject_id, title, description, duration, total_marks, is_active, target_form } = req.body;
     
     const updateData = {};
     if (subject_id) updateData.subject_id = subject_id;
@@ -3338,6 +3365,7 @@ app.put('/api/admin/quizzes/:quizId', authenticateToken, authenticateAdmin, asyn
     if (duration) updateData.duration = duration;
     if (total_marks !== undefined) updateData.total_marks = total_marks;
     if (is_active !== undefined) updateData.is_active = is_active;
+    if (target_form !== undefined) updateData.target_form = target_form;
     updateData.updated_at = new Date().toISOString();
     
     const { data: quiz, error } = await supabase
@@ -3415,10 +3443,24 @@ app.delete('/api/admin/quizzes/:quizId', authenticateToken, authenticateAdmin, a
   }
 });
 
-// Get all active quizzes for learners
+// Get all active quizzes for learners (filtered by form)
 app.get('/api/quiz/quizzes', authenticateToken, async (req, res) => {
   try {
     console.log('📚 Fetching quizzes for learner:', req.user.id);
+
+    const { data: learner, error: learnerError } = await supabase
+      .from('learners')
+      .select('form')
+      .eq('id', req.user.id)
+      .single();
+
+    if (learnerError || !learner) {
+      console.error('Error fetching learner:', learnerError);
+      return res.json({ success: true, quizzes: [] });
+    }
+
+    const learnerForm = learner.form;
+    console.log(`Learner form: ${learnerForm}`);
 
     const { data: quizzes, error } = await supabase
       .from('quizzes')
@@ -3427,6 +3469,7 @@ app.get('/api/quiz/quizzes', authenticateToken, async (req, res) => {
         subject:subject_id(id, name)
       `)
       .eq('is_active', true)
+      .in('target_form', ['All', learnerForm])
       .order('created_at', { ascending: false });
 
     if (error) {
@@ -3435,27 +3478,33 @@ app.get('/api/quiz/quizzes', authenticateToken, async (req, res) => {
     }
 
     const quizzesWithCounts = await Promise.all((quizzes || []).map(async (quiz) => {
-      const { count, error: countError } = await supabase
+      const { data: questions, error: countError } = await supabase
         .from('quiz_questions')
-        .select('*', { count: 'exact', head: true })
+        .select('points')
         .eq('quiz_id', quiz.id);
+      
+      const totalPoints = questions?.reduce((sum, q) => sum + (q.points || 1), 0) || 0;
       
       return {
         ...quiz,
         subject_name: quiz.subject?.name,
-        question_count: count || 0
+        question_count: questions?.length || 0,
+        total_points: totalPoints,
+        passing_points: quiz.passing_points || Math.round(totalPoints * 0.5)
       };
     }));
 
     res.json({
       success: true,
-      quizzes: quizzesWithCounts
+      quizzes: quizzesWithCounts,
+      learner_form: learnerForm
     });
   } catch (error) {
     console.error('Error fetching quizzes:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch quizzes: ' + error.message
+    res.json({ 
+      success: true, 
+      quizzes: [],
+      error: error.message 
     });
   }
 });
@@ -3497,13 +3546,39 @@ app.get('/api/quiz/:quizId/questions', authenticateToken, async (req, res) => {
       });
     }
 
+    const { data: existingAttempt, error: attemptError } = await supabase
+      .from('quiz_attempts')
+      .select('id, status, score, earned_points, total_points, passed')
+      .eq('learner_id', req.user.id)
+      .eq('quiz_id', quizId)
+      .maybeSingle();
+
+    if (existingAttempt && existingAttempt.status === 'completed') {
+      return res.json({
+        success: true,
+        already_completed: true,
+        attempt: existingAttempt,
+        quiz: {
+          ...quiz,
+          subject_name: quiz.subject?.name
+        }
+      });
+    }
+
+    let savedAnswers = null;
+    if (existingAttempt && existingAttempt.status === 'in-progress') {
+      savedAnswers = existingAttempt.answers;
+    }
+
     res.json({
       success: true,
       quiz: {
         ...quiz,
         subject_name: quiz.subject?.name
       },
-      questions: questions || []
+      questions: questions || [],
+      saved_answers: savedAnswers,
+      attempt_id: existingAttempt?.id || null
     });
   } catch (error) {
     console.error('Error fetching quiz questions:', error);
@@ -3634,9 +3709,23 @@ app.post('/api/quiz/:quizId/submit', authenticateToken, async (req, res) => {
     const gradedAnswers = [];
 
     questions.forEach((question, index) => {
-      const userAnswer = answers && answers[index] !== undefined ? answers[index] : -1;
-      const isCorrect = userAnswer === question.correct_answer;
-      const pointsObtained = isCorrect ? (question.points || 1) : 0;
+      const userAnswer = answers && answers[index] !== undefined ? answers[index] : null;
+      let isCorrect = false;
+      let pointsObtained = 0;
+      let userAnswerText = '';
+
+      if (question.question_type === 'multiple_choice') {
+        const selectedOption = parseInt(userAnswer);
+        userAnswerText = question.options[selectedOption] || 'Not answered';
+        isCorrect = selectedOption === question.correct_answer;
+        pointsObtained = isCorrect ? (question.points || 1) : 0;
+      } else {
+        userAnswerText = userAnswer ? String(userAnswer).trim().toLowerCase() : '';
+        const expectedAnswer = question.expected_answer ? question.expected_answer.trim().toLowerCase() : '';
+        isCorrect = userAnswerText === expectedAnswer || 
+                    (expectedAnswer && userAnswerText.includes(expectedAnswer));
+        pointsObtained = isCorrect ? (question.points || 1) : 0;
+      }
       
       earnedPoints += pointsObtained;
       totalPossiblePoints += (question.points || 1);
@@ -3645,13 +3734,15 @@ app.post('/api/quiz/:quizId/submit', authenticateToken, async (req, res) => {
       gradedAnswers.push({
         question_id: question.id,
         question_text: question.question_text,
+        question_type: question.question_type,
         selected_answer: userAnswer,
-        selected_answer_text: userAnswer !== -1 ? question.options[userAnswer] : 'Not answered',
+        selected_answer_text: userAnswerText || 'Not answered',
         is_correct: isCorrect,
         points_obtained: pointsObtained,
         max_points: question.points || 1,
-        correct_answer: question.correct_answer,
-        correct_answer_text: question.options[question.correct_answer],
+        correct_answer: question.question_type === 'multiple_choice' 
+          ? question.options[question.correct_answer] 
+          : question.expected_answer,
         explanation: question.explanation
       });
     });
@@ -3702,12 +3793,10 @@ app.post('/api/quiz/:quizId/submit', authenticateToken, async (req, res) => {
 });
 
 // Get learner's quiz history
-// Get learner's quiz history
 app.get('/api/quiz/history', authenticateToken, async (req, res) => {
   try {
     console.log(`📊 Fetching quiz history for learner: ${req.user.id}`);
     
-    // First, check if the quiz_attempts table exists
     const { data: tableCheck, error: tableError } = await supabase
       .from('quiz_attempts')
       .select('count')
@@ -3723,7 +3812,6 @@ app.get('/api/quiz/history', authenticateToken, async (req, res) => {
       });
     }
     
-    // Get attempts with safe joins
     const { data: attempts, error } = await supabase
       .from('quiz_attempts')
       .select(`
@@ -3745,7 +3833,6 @@ app.get('/api/quiz/history', authenticateToken, async (req, res) => {
     
     if (error) {
       console.error('Error fetching attempts:', error);
-      // Return empty array instead of throwing error
       return res.json({
         success: true,
         attempts: [],
@@ -3753,7 +3840,6 @@ app.get('/api/quiz/history', authenticateToken, async (req, res) => {
       });
     }
     
-    // Get quiz details separately for each attempt to avoid join issues
     const formattedAttempts = [];
     for (const attempt of (attempts || [])) {
       try {
@@ -3777,8 +3863,7 @@ app.get('/api/quiz/history', authenticateToken, async (req, res) => {
           time_taken: attempt.time_taken
         });
       } catch (err) {
-        console.error('Error fetching quiz details for attempt:', attempt.id, err);
-        // Still add the attempt with default values
+        console.error('Error fetching quiz details:', err);
         formattedAttempts.push({
           id: attempt.id,
           quiz_id: attempt.quiz_id,
@@ -3803,7 +3888,6 @@ app.get('/api/quiz/history', authenticateToken, async (req, res) => {
     });
   } catch (error) {
     console.error('Error in quiz history endpoint:', error);
-    // Always return a valid response structure
     res.json({
       success: true,
       attempts: [],
@@ -3812,6 +3896,100 @@ app.get('/api/quiz/history', authenticateToken, async (req, res) => {
   }
 });
 
+// Verify quiz access with registration number
+app.post('/api/quiz/:quizId/verify', authenticateToken, async (req, res) => {
+  try {
+    const { quizId } = req.params;
+    const { regNumber } = req.body;
+    
+    console.log(`🔐 Verifying quiz access for learner: ${req.user.id}, Quiz: ${quizId}`);
+    
+    const { data: learner, error: learnerError } = await supabase
+      .from('learners')
+      .select('reg_number, id, name, form')
+      .eq('id', req.user.id)
+      .single();
+    
+    if (learnerError || !learner) {
+      return res.status(404).json({
+        success: false,
+        message: 'Learner not found. Please login again.'
+      });
+    }
+    
+    const isValid = learner.reg_number.toUpperCase() === regNumber.toUpperCase();
+    
+    if (!isValid) {
+      return res.status(403).json({
+        success: false,
+        message: 'Invalid registration number. Access denied.'
+      });
+    }
+    
+    const { data: quiz, error: quizError } = await supabase
+      .from('quizzes')
+      .select('id, title, is_active, duration, total_points, target_form')
+      .eq('id', quizId)
+      .single();
+    
+    if (quizError || !quiz) {
+      return res.status(404).json({
+        success: false,
+        message: 'Quiz not found'
+      });
+    }
+    
+    if (!quiz.is_active) {
+      return res.status(403).json({
+        success: false,
+        message: 'This quiz is not currently available'
+      });
+    }
+    
+    // Check form eligibility
+    const isEligible = quiz.target_form === 'All' || quiz.target_form === learner.form;
+    
+    if (!isEligible) {
+      return res.status(403).json({
+        success: false,
+        message: `This quiz is only available for ${quiz.target_form} students. You are in ${learner.form}.`,
+        form_restricted: true,
+        required_form: quiz.target_form,
+        your_form: learner.form
+      });
+    }
+    
+    await logAdminAction(
+      req.user.id,
+      'QUIZ_ACCESS',
+      `Learner ${learner.name} (${learner.reg_number}, ${learner.form}) accessed quiz: ${quiz.title}`,
+      req.ip
+    );
+    
+    res.json({
+      success: true,
+      message: 'Access granted',
+      quiz: {
+        id: quiz.id,
+        title: quiz.title,
+        duration: quiz.duration,
+        total_points: quiz.total_points,
+        target_form: quiz.target_form
+      },
+      learner: {
+        form: learner.form,
+        is_eligible: true
+      }
+    });
+    
+  } catch (error) {
+    console.error('Error verifying quiz access:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to verify access. Please try again.'
+    });
+  }
+});
 
 // ============================================
 // 404 HANDLER
