@@ -3724,6 +3724,37 @@ app.get('/api/quiz/quizzes', authenticateToken, async (req, res) => {
   }
 });
 
+// Debug endpoint to check quiz data
+app.get('/api/admin/debug-quiz/:quizId', authenticateToken, authenticateAdmin, async (req, res) => {
+  try {
+    const { quizId } = req.params;
+    const quizIdInt = parseInt(quizId);
+    
+    console.log('Debug quiz ID:', quizId, 'Parsed as int:', quizIdInt);
+    
+    const { data: quiz, error } = await supabase
+      .from('quizzes')
+      .select('*')
+      .eq('id', quizIdInt)
+      .single();
+    
+    const { data: questions, error: qError } = await supabase
+      .from('quiz_questions')
+      .select('*')
+      .eq('quiz_id', quizIdInt);
+    
+    res.json({
+      quiz_id_received: quizId,
+      quiz_id_parsed: quizIdInt,
+      quiz: quiz,
+      questions: questions,
+      error: error?.message
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ============================================
 // 404 HANDLER
 // ============================================
