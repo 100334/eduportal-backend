@@ -3992,6 +3992,75 @@ app.post('/api/quiz/:quizId/verify', authenticateToken, async (req, res) => {
 });
 
 // ============================================
+// IMAGE UPLOAD ENDPOINT
+// ============================================
+
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
+
+// Configure multer for memory storage (or disk storage)
+const storage = multer.memoryStorage();
+const upload = multer({ 
+  storage: storage,
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = /jpeg|jpg|png|gif|webp/;
+    const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
+    const mimetype = allowedTypes.test(file.mimetype);
+    
+    if (mimetype && extname) {
+      return cb(null, true);
+    } else {
+      cb(new Error('Only image files are allowed'));
+    }
+  }
+});
+
+// Upload image endpoint
+app.post('/api/upload/image', authenticateToken, upload.single('image'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: 'No image file provided' });
+    }
+    
+    // Generate unique filename
+    const fileExt = path.extname(req.file.originalname);
+    const fileName = `${Date.now()}-${Math.random().toString(36).substring(7)}${fileExt}`;
+    const filePath = path.join(__dirname, 'uploads', fileName);
+    
+    // Ensure uploads directory exists
+    if (!fs.existsSync(path.join(__dirname, 'uploads'))) {
+      fs.mkdirSync(path.join(__dirname, 'uploads'));
+    }
+    
+    // Save file locally
+    fs.writeFileSync(filePath, req.file.buffer);
+    
+    // Generate URL (you'll need to serve static files)
+    const imageUrl = `${req.protocol}://${req.get('host')}/uploads/${fileName}`;
+    
+    // Optionally upload to Supabase Storage
+    // const { data, error } = await supabase.storage
+    //   .from('quiz-images')
+    //   .upload(fileName, req.file.buffer, { contentType: req.file.mimetype });
+    
+    res.json({
+      success: true,
+      url: imageUrl,
+      message: 'Image uploaded successfully'
+    });
+    
+  } catch (error) {
+    console.error('Upload error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Serve static files from uploads directory
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
+// ============================================
 // 404 HANDLER
 // ============================================
 
