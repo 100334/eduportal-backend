@@ -3087,78 +3087,37 @@ app.get('/api/admin/quizzes', authenticateToken, authenticateAdmin, async (req, 
 
 // Create a new quiz (admin)
 // Create a new quiz (admin) - WITH BETTER ERROR LOGGING
+
 app.post('/api/admin/quizzes', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
     const { subject_id, title, description, duration, total_marks, is_active } = req.body;
     
-    console.log('📝 Creating new quiz with data:', { 
-      subject_id, 
-      title, 
-      description, 
-      duration, 
-      total_marks, 
-      is_active,
-      user_id: req.user.id 
-    });
+    console.log('📝 Creating new quiz:', { subject_id, title, duration });
     
     if (!subject_id || !title) {
-      console.log('❌ Missing required fields');
       return res.status(400).json({
         success: false,
         message: 'Subject ID and title are required'
       });
     }
     
-    // First, check if the subjects table exists and has data
-    const { data: subjectsCheck, error: subjectsCheckError } = await supabase
-      .from('subjects')
-      .select('id, name')
-      .limit(1);
-    
-    console.log('Subjects table check:', { 
-      exists: !subjectsCheckError, 
-      count: subjectsCheck?.length || 0,
-      error: subjectsCheckError?.message 
-    });
-    
-    // Verify subject exists with proper UUID format
-    console.log('Looking for subject with ID:', subject_id);
-    
+    // Verify subject exists
     const { data: subject, error: subjectError } = await supabase
       .from('subjects')
       .select('id, name')
       .eq('id', subject_id)
-      .maybeSingle();
+      .eq('status', 'Active')
+      .single();
     
-    if (subjectError) {
-      console.error('❌ Error checking subject:', subjectError);
-      return res.status(500).json({
-        success: false,
-        message: 'Database error while checking subject: ' + subjectError.message
-      });
-    }
-    
-    if (!subject) {
-      console.log('❌ Subject not found with ID:', subject_id);
-      
-      // List available subjects for debugging
-      const { data: availableSubjects } = await supabase
-        .from('subjects')
-        .select('id, name')
-        .limit(5);
-      
-      console.log('Available subjects:', availableSubjects);
-      
+    if (subjectError || !subject) {
+      console.error('Subject error:', subjectError);
       return res.status(400).json({
         success: false,
-        message: 'Invalid subject selected. Subject not found.',
-        available_subjects: availableSubjects
+        message: 'Invalid subject selected'
       });
     }
     
-    console.log('✅ Found subject:', subject);
-    
-    // Prepare quiz data - DON'T include id field, let it auto-generate
+    // DO NOT include an 'id' field - let the database auto-generate BIGSERIAL
     const quizData = {
       subject_id: subject_id,
       title: title.trim(),
@@ -3176,29 +3135,18 @@ app.post('/api/admin/quizzes', authenticateToken, authenticateAdmin, async (req,
     const { data: quiz, error } = await supabase
       .from('quizzes')
       .insert(quizData)
-      .select()
+      .select(`
+        *,
+        subject:subject_id(id, name)
+      `)
       .single();
     
     if (error) {
-      console.error('❌ Supabase insert error:', {
-        message: error.message,
-        code: error.code,
-        details: error.details,
-        hint: error.hint
-      });
-      
+      console.error('Supabase insert error:', error);
       return res.status(500).json({
         success: false,
         message: 'Database error: ' + error.message,
         details: error.details
-      });
-    }
-    
-    if (!quiz) {
-      console.error('❌ No quiz returned after insert');
-      return res.status(500).json({
-        success: false,
-        message: 'Quiz created but no data returned'
       });
     }
     
@@ -3209,23 +3157,23 @@ app.post('/api/admin/quizzes', authenticateToken, authenticateAdmin, async (req,
       req.ip
     );
     
-    console.log('✅ Quiz created successfully:', { id: quiz.id, title: quiz.title });
+    console.log('✅ Quiz created successfully. ID:', quiz.id, 'Type:', typeof quiz.id);
     
     res.json({
       success: true,
       message: 'Quiz created successfully',
       quiz: {
         ...quiz,
-        subject_name: subject.name
+        subject_name: quiz.subject?.name,
+        id: parseInt(quiz.id) // Ensure it's a number
       }
     });
     
   } catch (error) {
-    console.error('❌ Unexpected error creating quiz:', error);
+    console.error('Error creating quiz:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to create quiz: ' + error.message,
-      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+      message: 'Failed to create quiz: ' + error.message
     });
   }
 });
@@ -3347,13 +3295,24 @@ app.post('/api/admin/quizzes/:quizId/questions', authenticateToken, authenticate
       });
     }
     
+    // Convert quizId to integer (BIGINT)
+    const quizIdInt = parseInt(quizId);
+    if (isNaN(quizIdInt)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid quiz ID'
+      });
+    }
+    
+    // Verify quiz exists with integer ID
     const { data: quizExists, error: quizError } = await supabase
       .from('quizzes')
       .select('id')
-      .eq('id', quizId)
+      .eq('id', quizIdInt)
       .single();
     
     if (quizError || !quizExists) {
+      console.error('Quiz not found:', quizError);
       return res.status(404).json({
         success: false,
         message: 'Quiz not found'
@@ -3365,7 +3324,7 @@ app.post('/api/admin/quizzes/:quizId/questions', authenticateToken, authenticate
       const { data: maxOrder, error: orderError } = await supabase
         .from('quiz_questions')
         .select('display_order')
-        .eq('quiz_id', quizId)
+        .eq('quiz_id', quizIdInt)
         .order('display_order', { ascending: false })
         .limit(1);
       
@@ -3373,7 +3332,7 @@ app.post('/api/admin/quizzes/:quizId/questions', authenticateToken, authenticate
     }
     
     const questionData = {
-      quiz_id: parseInt(quizId),
+      quiz_id: quizIdInt, // Use integer
       question_text: question_text,
       options: options,
       correct_answer: correct_answer,
@@ -3397,23 +3356,24 @@ app.post('/api/admin/quizzes/:quizId/questions', authenticateToken, authenticate
       });
     }
     
+    // Update quiz total marks
     const { data: questions, error: questionsError } = await supabase
       .from('quiz_questions')
       .select('marks')
-      .eq('quiz_id', quizId);
+      .eq('quiz_id', quizIdInt);
     
     if (!questionsError && questions && questions.length > 0) {
       const totalMarks = questions.reduce((sum, q) => sum + (q.marks || 1), 0);
       await supabase
         .from('quizzes')
         .update({ total_marks: totalMarks, updated_at: new Date().toISOString() })
-        .eq('id', quizId);
+        .eq('id', quizIdInt);
     }
     
     await logAdminAction(
       req.user.id,
       'ADD_QUESTION',
-      `Added question to quiz ID ${quizId}`,
+      `Added question to quiz ID ${quizIdInt}`,
       req.ip
     );
     
