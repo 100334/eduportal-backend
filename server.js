@@ -8,7 +8,8 @@ const dotenv = require('dotenv');
 const { createClient } = require('@supabase/supabase-js');
 const multer = require('multer');
 const path = require('path');
-const fs = require('fs');
+const fs = require('fs').promises;
+const crypto = require('crypto');
 
 // Load environment variables
 dotenv.config();
@@ -3985,7 +3986,7 @@ app.post('/api/quiz/:quizId/verify', authenticateToken, async (req, res) => {
 });
 
 // ============================================
-// IMAGE UPLOAD ENDPOINT
+// IMAGE UPLOAD ENDPOINT (IMPROVED)
 // ============================================
 
 // Configure multer for memory storage
@@ -4001,10 +4002,14 @@ const upload = multer({
     if (mimetype && extname) {
       return cb(null, true);
     } else {
-      cb(new Error('Only image files are allowed'));
+      cb(new Error('Only image files are allowed (JPEG, PNG, GIF, WEBP)'));
     }
   }
 });
+
+// Ensure uploads directory exists
+const uploadsDir = path.join(__dirname, 'uploads');
+fs.mkdir(uploadsDir, { recursive: true }).catch(console.error);
 
 // Upload image endpoint
 app.post('/api/upload/image', authenticateToken, upload.single('image'), async (req, res) => {
@@ -4012,37 +4017,36 @@ app.post('/api/upload/image', authenticateToken, upload.single('image'), async (
     if (!req.file) {
       return res.status(400).json({ success: false, message: 'No image file provided' });
     }
-    
+
     // Generate unique filename
     const fileExt = path.extname(req.file.originalname);
-    const fileName = `${Date.now()}-${Math.random().toString(36).substring(7)}${fileExt}`;
-    const filePath = path.join(__dirname, 'uploads', fileName);
-    
-    // Ensure uploads directory exists
-    if (!fs.existsSync(path.join(__dirname, 'uploads'))) {
-      fs.mkdirSync(path.join(__dirname, 'uploads'));
-    }
-    
-    // Save file locally
-    fs.writeFileSync(filePath, req.file.buffer);
-    
-    // Generate URL
-    const imageUrl = `${req.protocol}://${req.get('host')}/uploads/${fileName}`;
-    
+    const fileName = `${Date.now()}-${crypto.randomUUID()}${fileExt}`;
+    const filePath = path.join(uploadsDir, fileName);
+
+    // Write file to disk asynchronously
+    await fs.writeFile(filePath, req.file.buffer);
+
+    // Build full URL (considering proxy/headers)
+    const protocol = req.protocol;
+    const host = req.get('host');
+    const imageUrl = `${protocol}://${host}/uploads/${fileName}`;
+
     res.json({
       success: true,
       url: imageUrl,
       message: 'Image uploaded successfully'
     });
-    
   } catch (error) {
     console.error('Upload error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ 
+      success: false, 
+      message: error.message || 'Failed to upload image'
+    });
   }
 });
 
 // Serve static files from uploads directory
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+app.use('/uploads', express.static(uploadsDir));
 
 // ============================================
 // TEACHER DEBUG ENDPOINT
