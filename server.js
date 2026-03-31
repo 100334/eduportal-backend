@@ -6,6 +6,9 @@ const compression = require('compression');
 const rateLimit = require('express-rate-limit');
 const dotenv = require('dotenv');
 const { createClient } = require('@supabase/supabase-js');
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
 
 // Load environment variables
 dotenv.config();
@@ -1563,33 +1566,6 @@ app.delete('/api/admin/subjects/:subjectId', authenticateToken, authenticateAdmi
 });
 
 // ============================================
-// ASSESSMENT TYPES ROUTE
-// ============================================
-
-app.get('/api/teacher/assessment-types', authenticateToken, async (req, res) => {
-  try {
-    const { data: types, error } = await supabase
-      .from('assessment_types')
-      .select('*')
-      .eq('is_active', true)
-      .order('display_order', { ascending: true });
-    
-    if (error) throw error;
-    
-    res.json({
-      success: true,
-      assessment_types: types || []
-    });
-  } catch (err) {
-    console.error('Error fetching assessment types:', err);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch assessment types'
-    });
-  }
-});
-
-// ============================================
 // TEACHER ROUTES
 // ============================================
 
@@ -2114,6 +2090,29 @@ app.delete('/api/teacher/reports/:reportId', authenticateToken, async (req, res)
     res.status(500).json({
       success: false,
       message: 'Database error: ' + err.message
+    });
+  }
+});
+
+app.get('/api/teacher/assessment-types', authenticateToken, async (req, res) => {
+  try {
+    const { data: types, error } = await supabase
+      .from('assessment_types')
+      .select('*')
+      .eq('is_active', true)
+      .order('display_order', { ascending: true });
+    
+    if (error) throw error;
+    
+    res.json({
+      success: true,
+      assessment_types: types || []
+    });
+  } catch (err) {
+    console.error('Error fetching assessment types:', err);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch assessment types'
     });
   }
 });
@@ -2898,101 +2897,7 @@ app.get('/api/learner/dashboard/stats', authenticateToken, async (req, res) => {
 });
 
 // ============================================
-// TEACHER DEBUG ENDPOINT
-// ============================================
-
-app.get('/api/teacher/debug-setup', authenticateToken, async (req, res) => {
-  try {
-    console.log('🔍 Debugging teacher setup for user:', req.user.id);
-    
-    const { data: teacher, error: teacherError } = await supabase
-      .from('users')
-      .select('id, email, name, role, class_id')
-      .eq('id', req.user.id)
-      .maybeSingle();
-    
-    if (teacherError) throw teacherError;
-    
-    let classInfo = null;
-    if (teacher?.class_id) {
-      const { data: classData, error: classError } = await supabase
-        .from('classes')
-        .select('*')
-        .eq('id', teacher.class_id)
-        .maybeSingle();
-      if (!classError) classInfo = classData;
-    }
-    
-    const { data: allClasses, error: classesError } = await supabase
-      .from('classes')
-      .select('id, name, year');
-    
-    const { data: allTeachers, error: teachersError } = await supabase
-      .from('users')
-      .select('id, email, name, role, class_id')
-      .eq('role', 'teacher');
-    
-    let learnersInClass = [];
-    if (teacher?.class_id) {
-      const { data: learners, error: learnersError } = await supabase
-        .from('learners')
-        .select('id, name, reg_number, form')
-        .eq('class_id', teacher.class_id);
-      if (!learnersError) learnersInClass = learners || [];
-    }
-    
-    res.json({
-      success: true,
-      current_teacher: {
-        id: teacher?.id,
-        email: teacher?.email,
-        name: teacher?.name,
-        class_id: teacher?.class_id,
-        has_class: !!teacher?.class_id,
-        message: teacher?.class_id ? 'Teacher has a class assigned' : 'Teacher has NO class assigned'
-      },
-      assigned_class: classInfo,
-      learners_in_class: learnersInClass,
-      learners_count: learnersInClass.length,
-      all_classes: allClasses || [],
-      all_teachers: allTeachers || [],
-      recommendation: !teacher?.class_id ? 'Run SQL to assign teacher to a class' : null
-    });
-    
-  } catch (err) {
-    console.error('Debug error:', err);
-    res.status(500).json({
-      success: false,
-      error: err.message
-    });
-  }
-});
-
-// ============================================
-// DEBUG ENDPOINTS
-// ============================================
-
-app.get('/api/debug/learners', async (req, res) => {
-  try {
-    const { data: learners, error } = await supabase
-      .from('learners')
-      .select('id, name, reg_number, form, status')
-      .limit(10);
-    
-    if (error) throw error;
-    
-    res.json({
-      success: true,
-      count: learners?.length || 0,
-      learners: learners
-    });
-  } catch (error) {
-    res.json({ success: false, error: error.message });
-  }
-});
-
-// ============================================
-// COMPLETE QUIZ SYSTEM ENDPOINTS
+// QUIZ SYSTEM ENDPOINTS
 // ============================================
 
 // Get available subjects for quiz creation
@@ -3665,6 +3570,95 @@ app.post('/api/quiz/:quizId/start', authenticateToken, async (req, res) => {
   }
 });
 
+// Save answer during quiz (AUTO-SAVE endpoint)
+app.post('/api/quiz/:quizId/save-answer', authenticateToken, async (req, res) => {
+  try {
+    const { quizId } = req.params;
+    const { question_index, answer, attempt_id } = req.body;
+    
+    console.log(`💾 Saving answer for quiz: ${quizId}, Question: ${question_index}`);
+
+    let attempt = null;
+    
+    if (attempt_id) {
+      const { data, error } = await supabase
+        .from('quiz_attempts')
+        .select('id, answers')
+        .eq('id', attempt_id)
+        .eq('learner_id', req.user.id)
+        .eq('status', 'in-progress')
+        .maybeSingle();
+      
+      if (!error && data) {
+        attempt = data;
+      }
+    }
+    
+    if (!attempt) {
+      const { data, error } = await supabase
+        .from('quiz_attempts')
+        .select('id, answers')
+        .eq('learner_id', req.user.id)
+        .eq('quiz_id', quizId)
+        .eq('status', 'in-progress')
+        .maybeSingle();
+      
+      if (!error && data) {
+        attempt = data;
+      }
+    }
+    
+    if (!attempt) {
+      return res.status(404).json({
+        success: false,
+        message: 'No active quiz attempt found'
+      });
+    }
+    
+    let currentAnswers = attempt.answers || {};
+    
+    if (typeof currentAnswers === 'string') {
+      try {
+        currentAnswers = JSON.parse(currentAnswers);
+      } catch (e) {
+        currentAnswers = {};
+      }
+    }
+    
+    currentAnswers[question_index] = answer;
+    
+    const { error: updateError } = await supabase
+      .from('quiz_attempts')
+      .update({
+        answers: currentAnswers,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', attempt.id);
+    
+    if (updateError) {
+      console.error('Error saving answer:', updateError);
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to save answer: ' + updateError.message
+      });
+    }
+    
+    console.log(`✅ Answer saved successfully for question ${question_index}`);
+    
+    res.json({
+      success: true,
+      message: 'Answer saved successfully'
+    });
+    
+  } catch (error) {
+    console.error('Error in save-answer endpoint:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to save answer: ' + error.message
+    });
+  }
+});
+
 // Submit quiz answers
 app.post('/api/quiz/:quizId/submit', authenticateToken, async (req, res) => {
   try {
@@ -3946,7 +3940,6 @@ app.post('/api/quiz/:quizId/verify', authenticateToken, async (req, res) => {
       });
     }
     
-    // Check form eligibility
     const isEligible = quiz.target_form === 'All' || quiz.target_form === learner.form;
     
     if (!isEligible) {
@@ -3995,11 +3988,7 @@ app.post('/api/quiz/:quizId/verify', authenticateToken, async (req, res) => {
 // IMAGE UPLOAD ENDPOINT
 // ============================================
 
-const multer = require('multer');
-const path = require('path');
-const fs = require('fs');
-
-// Configure multer for memory storage (or disk storage)
+// Configure multer for memory storage
 const storage = multer.memoryStorage();
 const upload = multer({ 
   storage: storage,
@@ -4037,13 +4026,8 @@ app.post('/api/upload/image', authenticateToken, upload.single('image'), async (
     // Save file locally
     fs.writeFileSync(filePath, req.file.buffer);
     
-    // Generate URL (you'll need to serve static files)
+    // Generate URL
     const imageUrl = `${req.protocol}://${req.get('host')}/uploads/${fileName}`;
-    
-    // Optionally upload to Supabase Storage
-    // const { data, error } = await supabase.storage
-    //   .from('quiz-images')
-    //   .upload(fileName, req.file.buffer, { contentType: req.file.mimetype });
     
     res.json({
       success: true,
@@ -4059,6 +4043,100 @@ app.post('/api/upload/image', authenticateToken, upload.single('image'), async (
 
 // Serve static files from uploads directory
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
+// ============================================
+// TEACHER DEBUG ENDPOINT
+// ============================================
+
+app.get('/api/teacher/debug-setup', authenticateToken, async (req, res) => {
+  try {
+    console.log('🔍 Debugging teacher setup for user:', req.user.id);
+    
+    const { data: teacher, error: teacherError } = await supabase
+      .from('users')
+      .select('id, email, name, role, class_id')
+      .eq('id', req.user.id)
+      .maybeSingle();
+    
+    if (teacherError) throw teacherError;
+    
+    let classInfo = null;
+    if (teacher?.class_id) {
+      const { data: classData, error: classError } = await supabase
+        .from('classes')
+        .select('*')
+        .eq('id', teacher.class_id)
+        .maybeSingle();
+      if (!classError) classInfo = classData;
+    }
+    
+    const { data: allClasses, error: classesError } = await supabase
+      .from('classes')
+      .select('id, name, year');
+    
+    const { data: allTeachers, error: teachersError } = await supabase
+      .from('users')
+      .select('id, email, name, role, class_id')
+      .eq('role', 'teacher');
+    
+    let learnersInClass = [];
+    if (teacher?.class_id) {
+      const { data: learners, error: learnersError } = await supabase
+        .from('learners')
+        .select('id, name, reg_number, form')
+        .eq('class_id', teacher.class_id);
+      if (!learnersError) learnersInClass = learners || [];
+    }
+    
+    res.json({
+      success: true,
+      current_teacher: {
+        id: teacher?.id,
+        email: teacher?.email,
+        name: teacher?.name,
+        class_id: teacher?.class_id,
+        has_class: !!teacher?.class_id,
+        message: teacher?.class_id ? 'Teacher has a class assigned' : 'Teacher has NO class assigned'
+      },
+      assigned_class: classInfo,
+      learners_in_class: learnersInClass,
+      learners_count: learnersInClass.length,
+      all_classes: allClasses || [],
+      all_teachers: allTeachers || [],
+      recommendation: !teacher?.class_id ? 'Run SQL to assign teacher to a class' : null
+    });
+    
+  } catch (err) {
+    console.error('Debug error:', err);
+    res.status(500).json({
+      success: false,
+      error: err.message
+    });
+  }
+});
+
+// ============================================
+// DEBUG ENDPOINTS
+// ============================================
+
+app.get('/api/debug/learners', async (req, res) => {
+  try {
+    const { data: learners, error } = await supabase
+      .from('learners')
+      .select('id, name, reg_number, form, status')
+      .limit(10);
+    
+    if (error) throw error;
+    
+    res.json({
+      success: true,
+      count: learners?.length || 0,
+      learners: learners
+    });
+  } catch (error) {
+    res.json({ success: false, error: error.message });
+  }
+});
 
 // ============================================
 // 404 HANDLER
@@ -4153,8 +4231,10 @@ app.listen(PORT, () => {
   console.log('   GET    /api/quiz/quizzes');
   console.log('   GET    /api/quiz/:quizId/questions');
   console.log('   POST   /api/quiz/:quizId/start');
+  console.log('   POST   /api/quiz/:quizId/save-answer');
   console.log('   POST   /api/quiz/:quizId/submit');
   console.log('   GET    /api/quiz/history');
+  console.log('   POST   /api/quiz/:quizId/verify');
   console.log('='.repeat(60));
 });
 
