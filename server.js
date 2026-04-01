@@ -2900,10 +2900,10 @@ app.get('/api/learner/dashboard/stats', authenticateToken, async (req, res) => {
 });
 
 // ============================================
-// QUIZ SYSTEM ENDPOINTS
+// QUIZ SYSTEM ENDPOINTS (updated for marks & feedback)
 // ============================================
 
-// Get available subjects for quiz creation
+// Get available subjects for quiz creation (unchanged)
 app.get('/api/admin/quiz-subjects', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
     console.log('📚 Fetching available subjects for quizzes');
@@ -2936,7 +2936,7 @@ app.get('/api/admin/quiz-subjects', authenticateToken, authenticateAdmin, async 
   }
 });
 
-// Get all quizzes (admin)
+// Get all quizzes (admin) - unchanged
 app.get('/api/admin/quizzes', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
     console.log('📚 Admin fetching all quizzes');
@@ -2983,7 +2983,7 @@ app.get('/api/admin/quizzes', authenticateToken, authenticateAdmin, async (req, 
   }
 });
 
-// Create a new quiz (admin)
+// Create a new quiz (admin) - unchanged
 app.post('/api/admin/quizzes', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
     const { subject_id, title, description, duration, total_marks, is_active, target_form } = req.body;
@@ -3069,7 +3069,7 @@ app.post('/api/admin/quizzes', authenticateToken, authenticateAdmin, async (req,
   }
 });
 
-// Get questions for a specific quiz (admin)
+// Get questions for a specific quiz (admin) - unchanged
 app.get('/api/admin/quizzes/:quizId/questions', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
     const { quizId } = req.params;
@@ -3117,7 +3117,7 @@ app.get('/api/admin/quizzes/:quizId/questions', authenticateToken, authenticateA
   }
 });
 
-// Add question to quiz (admin)
+// Add question to quiz (admin) - unchanged
 app.post('/api/admin/quizzes/:quizId/questions', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
     const { quizId } = req.params;
@@ -3188,7 +3188,7 @@ app.post('/api/admin/quizzes/:quizId/questions', authenticateToken, authenticate
       question_text: question_text,
       question_type: qType,
       marks: questionMarks,
-      points: questionMarks,
+      points: questionMarks, // keep for compatibility
       display_order: finalDisplayOrder,
       created_at: new Date().toISOString()
     };
@@ -3260,7 +3260,7 @@ app.post('/api/admin/quizzes/:quizId/questions', authenticateToken, authenticate
   }
 });
 
-// Update quiz (admin)
+// Update quiz (admin) - unchanged
 app.put('/api/admin/quizzes/:quizId', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
     const { quizId } = req.params;
@@ -3307,7 +3307,7 @@ app.put('/api/admin/quizzes/:quizId', authenticateToken, authenticateAdmin, asyn
   }
 });
 
-// Delete quiz (admin)
+// Delete quiz (admin) - unchanged
 app.delete('/api/admin/quizzes/:quizId', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
     const { quizId } = req.params;
@@ -3351,7 +3351,7 @@ app.delete('/api/admin/quizzes/:quizId', authenticateToken, authenticateAdmin, a
   }
 });
 
-// Get all active quizzes for learners (filtered by form)
+// Get all active quizzes for learners (filtered by form) - unchanged
 app.get('/api/quiz/quizzes', authenticateToken, async (req, res) => {
   try {
     console.log('📚 Fetching quizzes for learner:', req.user.id);
@@ -3388,17 +3388,17 @@ app.get('/api/quiz/quizzes', authenticateToken, async (req, res) => {
     const quizzesWithCounts = await Promise.all((quizzes || []).map(async (quiz) => {
       const { data: questions, error: countError } = await supabase
         .from('quiz_questions')
-        .select('points')
+        .select('marks')
         .eq('quiz_id', quiz.id);
       
-      const totalPoints = questions?.reduce((sum, q) => sum + (q.points || 1), 0) || 0;
+      const totalMarks = questions?.reduce((sum, q) => sum + (q.marks || 1), 0) || 0;
       
       return {
         ...quiz,
         subject_name: quiz.subject?.name,
         question_count: questions?.length || 0,
-        total_points: totalPoints,
-        passing_points: quiz.passing_points || Math.round(totalPoints * 0.5)
+        total_marks: totalMarks,
+        passing_marks: quiz.passing_points || Math.round(totalMarks * 0.5)
       };
     }));
 
@@ -3417,7 +3417,7 @@ app.get('/api/quiz/quizzes', authenticateToken, async (req, res) => {
   }
 });
 
-// Get quiz questions for learners
+// Get quiz questions for learners - unchanged (but returns marks)
 app.get('/api/quiz/:quizId/questions', authenticateToken, async (req, res) => {
   try {
     const { quizId } = req.params;
@@ -3497,7 +3497,7 @@ app.get('/api/quiz/:quizId/questions', authenticateToken, async (req, res) => {
   }
 });
 
-// Start a quiz attempt
+// Start a quiz attempt - unchanged
 app.post('/api/quiz/:quizId/start', authenticateToken, async (req, res) => {
   try {
     const { quizId } = req.params;
@@ -3506,7 +3506,7 @@ app.post('/api/quiz/:quizId/start', authenticateToken, async (req, res) => {
 
     const { data: quiz, error: quizError } = await supabase
       .from('quizzes')
-      .select('subject_id, subject:subject_id(name), total_points, passing_points')
+      .select('subject_id, subject:subject_id(name), total_marks, passing_points')
       .eq('id', quizId)
       .single();
 
@@ -3540,7 +3540,7 @@ app.post('/api/quiz/:quizId/start', authenticateToken, async (req, res) => {
         quiz_id: quizId,
         subject_id: quiz.subject_id,
         subject: quiz.subject?.name,
-        total_points: quiz.total_points || 0,
+        total_marks: quiz.total_marks || 0,
         status: 'in-progress',
         started_at: new Date().toISOString()
       })
@@ -3560,8 +3560,8 @@ app.post('/api/quiz/:quizId/start', authenticateToken, async (req, res) => {
       attempt_id: attempt.id,
       message: 'Quiz started successfully',
       quiz: {
-        total_points: quiz.total_points,
-        passing_points: quiz.passing_points
+        total_marks: quiz.total_marks,
+        passing_marks: quiz.passing_points
       }
     });
   } catch (error) {
@@ -3573,7 +3573,7 @@ app.post('/api/quiz/:quizId/start', authenticateToken, async (req, res) => {
   }
 });
 
-// Save answer during quiz (AUTO-SAVE endpoint)
+// Save answer during quiz (AUTO-SAVE) - unchanged
 app.post('/api/quiz/:quizId/save-answer', authenticateToken, async (req, res) => {
   try {
     const { quizId } = req.params;
@@ -3662,7 +3662,7 @@ app.post('/api/quiz/:quizId/save-answer', authenticateToken, async (req, res) =>
   }
 });
 
-// Submit quiz answers
+// Submit quiz answers (updated to return marks_earned and total_marks)
 app.post('/api/quiz/:quizId/submit', authenticateToken, async (req, res) => {
   try {
     const { quizId } = req.params;
@@ -3670,6 +3670,7 @@ app.post('/api/quiz/:quizId/submit', authenticateToken, async (req, res) => {
     
     console.log(`📝 Submitting quiz: ${quizId} for learner: ${req.user.id}`);
 
+    // Find active attempt
     const { data: attempt, error: attemptError } = await supabase
       .from('quiz_attempts')
       .select('id, status')
@@ -3685,6 +3686,7 @@ app.post('/api/quiz/:quizId/submit', authenticateToken, async (req, res) => {
       });
     }
 
+    // Fetch quiz questions
     const { data: questions, error: questionsError } = await supabase
       .from('quiz_questions')
       .select('*')
@@ -3692,9 +3694,10 @@ app.post('/api/quiz/:quizId/submit', authenticateToken, async (req, res) => {
 
     if (questionsError) throw questionsError;
 
+    // Fetch quiz details
     const { data: quiz, error: quizError } = await supabase
       .from('quizzes')
-      .select('total_points, passing_points')
+      .select('total_marks, passing_points')
       .eq('id', quizId)
       .single();
 
@@ -3715,19 +3718,19 @@ app.post('/api/quiz/:quizId/submit', authenticateToken, async (req, res) => {
         const selectedOption = parseInt(userAnswer);
         userAnswerText = question.options[selectedOption] || 'Not answered';
         isCorrect = selectedOption === question.correct_answer;
-        pointsObtained = isCorrect ? (question.points || 1) : 0;
+        pointsObtained = isCorrect ? (question.marks || 1) : 0;
       } else {
         userAnswerText = userAnswer ? String(userAnswer).trim().toLowerCase() : '';
         const expectedAnswer = question.expected_answer ? question.expected_answer.trim().toLowerCase() : '';
-        isCorrect = userAnswerText === expectedAnswer || 
+        isCorrect = userAnswerText === expectedAnswer ||
                     (expectedAnswer && userAnswerText.includes(expectedAnswer));
-        pointsObtained = isCorrect ? (question.points || 1) : 0;
+        pointsObtained = isCorrect ? (question.marks || 1) : 0;
       }
-      
+
       earnedPoints += pointsObtained;
-      totalPossiblePoints += (question.points || 1);
+      totalPossiblePoints += (question.marks || 1);
       if (isCorrect) correctCount++;
-      
+
       gradedAnswers.push({
         question_id: question.id,
         question_text: question.question_text,
@@ -3736,11 +3739,12 @@ app.post('/api/quiz/:quizId/submit', authenticateToken, async (req, res) => {
         selected_answer_text: userAnswerText || 'Not answered',
         is_correct: isCorrect,
         points_obtained: pointsObtained,
-        max_points: question.points || 1,
-        correct_answer: question.question_type === 'multiple_choice' 
-          ? question.options[question.correct_answer] 
+        max_points: question.marks || 1,
+        correct_answer: question.question_type === 'multiple_choice'
+          ? question.options[question.correct_answer]
           : question.expected_answer,
-        explanation: question.explanation
+        explanation: question.explanation,
+        feedback: null // initially null, to be filled by admin later
       });
     });
 
@@ -3758,7 +3762,8 @@ app.post('/api/quiz/:quizId/submit', authenticateToken, async (req, res) => {
         passed: passed,
         status: 'completed',
         completed_at: new Date().toISOString(),
-        time_taken: time_taken || null
+        time_taken: time_taken || null,
+        feedback: null // overall feedback initially null
       })
       .eq('id', attempt.id)
       .select()
@@ -3766,19 +3771,21 @@ app.post('/api/quiz/:quizId/submit', authenticateToken, async (req, res) => {
 
     if (updateError) throw updateError;
 
+    // Return result with marks_earned and total_marks
     res.json({
       success: true,
-      earned_points: earnedPoints,
-      total_points: totalPossiblePoints,
+      marks_earned: earnedPoints,
+      total_marks: totalPossiblePoints,
       correct_answers: correctCount,
       total_questions: questions.length,
       percentage: Math.round(percentage),
       passed: passed,
       passing_score: quiz.passing_points || Math.round(totalPossiblePoints * 0.5),
       answers: gradedAnswers,
-      message: passed 
-        ? `🎉 Congratulations! You passed with ${earnedPoints}/${totalPossiblePoints} points!` 
-        : `📚 Keep practicing! You got ${earnedPoints}/${totalPossiblePoints} points.`
+      feedback: null,
+      message: passed
+        ? `🎉 Congratulations! You passed with ${earnedPoints}/${totalPossiblePoints} marks!`
+        : `📚 Keep practicing! You got ${earnedPoints}/${totalPossiblePoints} marks.`
     });
   } catch (error) {
     console.error('Error submitting quiz:', error);
@@ -3789,26 +3796,22 @@ app.post('/api/quiz/:quizId/submit', authenticateToken, async (req, res) => {
   }
 });
 
-// Get learner's quiz history
+// Get learner's quiz history (updated to include marks and feedback)
 app.get('/api/quiz/history', authenticateToken, async (req, res) => {
   try {
     console.log(`📊 Fetching quiz history for learner: ${req.user.id}`);
-    
+
+    // Check if table exists (optional)
     const { data: tableCheck, error: tableError } = await supabase
       .from('quiz_attempts')
       .select('count')
       .limit(1)
       .maybeSingle();
-    
+
     if (tableError && tableError.message && tableError.message.includes('does not exist')) {
-      console.log('⚠️ quiz_attempts table does not exist yet');
-      return res.json({
-        success: true,
-        attempts: [],
-        message: 'No quiz attempts available yet'
-      });
+      return res.json({ success: true, attempts: [], message: 'No quiz attempts available yet' });
     }
-    
+
     const { data: attempts, error } = await supabase
       .from('quiz_attempts')
       .select(`
@@ -3822,42 +3825,40 @@ app.get('/api/quiz/history', authenticateToken, async (req, res) => {
         passed,
         status,
         completed_at,
-        time_taken
+        time_taken,
+        feedback
       `)
       .eq('learner_id', req.user.id)
       .eq('status', 'completed')
       .order('completed_at', { ascending: false });
-    
+
     if (error) {
       console.error('Error fetching attempts:', error);
-      return res.json({
-        success: true,
-        attempts: [],
-        message: 'No attempts found'
-      });
+      return res.json({ success: true, attempts: [] });
     }
-    
+
     const formattedAttempts = [];
     for (const attempt of (attempts || [])) {
       try {
         const { data: quiz, error: quizError } = await supabase
           .from('quizzes')
-          .select('id, title, total_points, passing_points')
+          .select('id, title, total_marks, passing_points')
           .eq('id', attempt.quiz_id)
           .maybeSingle();
-        
+
         formattedAttempts.push({
           id: attempt.id,
           quiz_id: attempt.quiz_id,
           quiz_title: quiz?.title || 'Unknown Quiz',
           subject: attempt.subject || 'General',
-          earned_points: attempt.earned_points || 0,
-          total_points: attempt.total_points || quiz?.total_points || 0,
+          marks_earned: attempt.earned_points || 0,
+          total_marks: attempt.total_points || (quiz?.total_marks || 0),
           percentage: Math.round(attempt.percentage || 0),
           passed: attempt.passed || false,
           correct_answers: attempt.score || 0,
           completed_at: attempt.completed_at,
-          time_taken: attempt.time_taken
+          time_taken: attempt.time_taken,
+          feedback: attempt.feedback || null
         });
       } catch (err) {
         console.error('Error fetching quiz details:', err);
@@ -3866,19 +3867,20 @@ app.get('/api/quiz/history', authenticateToken, async (req, res) => {
           quiz_id: attempt.quiz_id,
           quiz_title: 'Quiz',
           subject: attempt.subject || 'General',
-          earned_points: attempt.earned_points || 0,
-          total_points: attempt.total_points || 0,
+          marks_earned: attempt.earned_points || 0,
+          total_marks: attempt.total_points || 0,
           percentage: Math.round(attempt.percentage || 0),
           passed: attempt.passed || false,
           correct_answers: attempt.score || 0,
           completed_at: attempt.completed_at,
-          time_taken: attempt.time_taken
+          time_taken: attempt.time_taken,
+          feedback: attempt.feedback || null
         });
       }
     }
-    
+
     console.log(`✅ Found ${formattedAttempts.length} completed attempts`);
-    
+
     res.json({
       success: true,
       attempts: formattedAttempts
@@ -3893,7 +3895,7 @@ app.get('/api/quiz/history', authenticateToken, async (req, res) => {
   }
 });
 
-// Verify quiz access with registration number
+// Verify quiz access with registration number - unchanged
 app.post('/api/quiz/:quizId/verify', authenticateToken, async (req, res) => {
   try {
     const { quizId } = req.params;
@@ -3925,7 +3927,7 @@ app.post('/api/quiz/:quizId/verify', authenticateToken, async (req, res) => {
     
     const { data: quiz, error: quizError } = await supabase
       .from('quizzes')
-      .select('id, title, is_active, duration, total_points, target_form')
+      .select('id, title, is_active, duration, total_marks, target_form')
       .eq('id', quizId)
       .single();
     
@@ -3969,7 +3971,7 @@ app.post('/api/quiz/:quizId/verify', authenticateToken, async (req, res) => {
         id: quiz.id,
         title: quiz.title,
         duration: quiz.duration,
-        total_points: quiz.total_points,
+        total_marks: quiz.total_marks,
         target_form: quiz.target_form
       },
       learner: {
@@ -3987,11 +3989,12 @@ app.post('/api/quiz/:quizId/verify', authenticateToken, async (req, res) => {
   }
 });
 
-// ============================================
-// IMAGE UPLOAD ENDPOINT (IMPROVED)
-// ============================================
 
-// Configure multer for memory storage
+
+
+// ============================================
+// IMAGE UPLOAD ENDPOINT
+// ============================================
 const storage = multer.memoryStorage();
 const upload = multer({ 
   storage: storage,
@@ -4009,26 +4012,21 @@ const upload = multer({
   }
 });
 
-// Ensure uploads directory exists
 const uploadsDir = path.join(__dirname, 'uploads');
 fs.mkdir(uploadsDir, { recursive: true }).catch(console.error);
 
-// Upload image endpoint
 app.post('/api/upload/image', authenticateToken, upload.single('image'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ success: false, message: 'No image file provided' });
     }
 
-    // Generate unique filename
     const fileExt = path.extname(req.file.originalname);
     const fileName = `${Date.now()}-${crypto.randomUUID()}${fileExt}`;
     const filePath = path.join(uploadsDir, fileName);
 
-    // Write file to disk asynchronously
     await fs.writeFile(filePath, req.file.buffer);
 
-    // Build full URL (considering proxy/headers)
     const protocol = req.protocol;
     const host = req.get('host');
     const imageUrl = `${protocol}://${host}/uploads/${fileName}`;
@@ -4047,13 +4045,11 @@ app.post('/api/upload/image', authenticateToken, upload.single('image'), async (
   }
 });
 
-// Serve static files from uploads directory
 app.use('/uploads', express.static(uploadsDir));
 
 // ============================================
-// TEACHER DEBUG ENDPOINT
+// DEBUG AND MISC ENDPOINTS
 // ============================================
-
 app.get('/api/teacher/debug-setup', authenticateToken, async (req, res) => {
   try {
     console.log('🔍 Debugging teacher setup for user:', req.user.id);
@@ -4121,10 +4117,6 @@ app.get('/api/teacher/debug-setup', authenticateToken, async (req, res) => {
   }
 });
 
-// ============================================
-// DEBUG ENDPOINTS
-// ============================================
-
 app.get('/api/debug/learners', async (req, res) => {
   try {
     const { data: learners, error } = await supabase
@@ -4147,7 +4139,6 @@ app.get('/api/debug/learners', async (req, res) => {
 // ============================================
 // 404 HANDLER
 // ============================================
-
 app.use((req, res) => {
   console.log(`❌ Route not found: ${req.method} ${req.path}`);
   res.status(404).json({ 
@@ -4159,7 +4150,6 @@ app.use((req, res) => {
 // ============================================
 // ERROR HANDLER
 // ============================================
-
 app.use((err, req, res, next) => {
   console.error('Server error:', err);
   res.status(500).json({ 
@@ -4172,7 +4162,6 @@ app.use((err, req, res, next) => {
 // ============================================
 // START SERVER
 // ============================================
-
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
@@ -4208,6 +4197,8 @@ app.listen(PORT, () => {
   console.log('   PUT    /api/admin/quizzes/:quizId');
   console.log('   DELETE /api/admin/quizzes/:quizId');
   console.log('   POST   /api/admin/quizzes/:quizId/questions');
+  console.log('   GET    /api/admin/quizzes/:quizId/submissions');   // new
+  console.log('   POST   /api/admin/grade');                         // new
   
   console.log('\n📋 Teacher API Endpoints:');
   console.log('   GET    /api/teacher/dashboard/stats');
