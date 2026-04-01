@@ -8,6 +8,7 @@ const dotenv = require('dotenv');
 const { createClient } = require('@supabase/supabase-js');
 const multer = require('multer');
 const path = require('path');
+const fs = require('fs').promises;
 const crypto = require('crypto');
 
 // Load environment variables
@@ -3985,58 +3986,33 @@ app.post('/api/quiz/:quizId/verify', authenticateToken, async (req, res) => {
 });
 
 // ============================================
-// IMAGE UPLOAD ENDPOINT (Supabase Storage)
+// IMAGE UPLOAD ENDPOINT (IMPROVED)
 // ============================================
 
-const BUCKET_NAME = 'quiz-images';
-
-// Ensure bucket exists and is public (run once at startup)
-(async () => {
-  try {
-    const { data: buckets, error: listError } = await supabase.storage.listBuckets();
-    if (listError) {
-      console.error('❌ Failed to list buckets:', listError.message);
-      return;
-    }
-    const bucketExists = buckets?.some(b => b.name === BUCKET_NAME);
-    if (!bucketExists) {
-      console.log(`📦 Creating bucket: ${BUCKET_NAME}`);
-      const { error: createError } = await supabase.storage.createBucket(BUCKET_NAME, {
-        public: true,
-        allowedMimeTypes: ['image/jpeg', 'image/png', 'image/gif', 'image/webp'],
-        fileSizeLimit: 5 * 1024 * 1024 // 5MB
-      });
-      if (createError) {
-        console.error(`❌ Failed to create bucket ${BUCKET_NAME}:`, createError.message);
-      } else {
-        console.log(`✅ Bucket ${BUCKET_NAME} created and set to public`);
-      }
-    } else {
-      console.log(`✅ Bucket ${BUCKET_NAME} already exists`);
-    }
-  } catch (err) {
-    console.error('❌ Bucket initialization error:', err);
-  }
-})();
-
 // Configure multer for memory storage
-const uploadImage = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 5 * 1024 * 1024 },
+const storage = multer.memoryStorage();
+const upload = multer({ 
+  storage: storage,
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
   fileFilter: (req, file, cb) => {
     const allowedTypes = /jpeg|jpg|png|gif|webp/;
     const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
     const mimetype = allowedTypes.test(file.mimetype);
+    
     if (mimetype && extname) {
-      cb(null, true);
+      return cb(null, true);
     } else {
       cb(new Error('Only image files are allowed (JPEG, PNG, GIF, WEBP)'));
     }
   }
 });
 
+// Ensure uploads directory exists
+const uploadsDir = path.join(__dirname, 'uploads');
+fs.mkdir(uploadsDir, { recursive: true }).catch(console.error);
+
 // Upload image endpoint
-app.post('/api/upload/image', authenticateToken, uploadImage.single('image'), async (req, res) => {
+app.post('/api/upload/image', authenticateToken, upload.single('image'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ success: false, message: 'No image file provided' });
@@ -4045,34 +4021,15 @@ app.post('/api/upload/image', authenticateToken, uploadImage.single('image'), as
     // Generate unique filename
     const fileExt = path.extname(req.file.originalname);
     const fileName = `${Date.now()}-${crypto.randomUUID()}${fileExt}`;
-    const filePath = `diagrams/${fileName}`; // optional folder
+    const filePath = path.join(uploadsDir, fileName);
 
-    console.log(`📤 Uploading file: ${filePath}, size: ${req.file.size} bytes`);
+    // Write file to disk asynchronously
+    await fs.writeFile(filePath, req.file.buffer);
 
-    // Upload to Supabase Storage
-    const { data, error } = await supabase.storage
-      .from(BUCKET_NAME)
-      .upload(filePath, req.file.buffer, {
-        contentType: req.file.mimetype,
-        cacheControl: '3600'
-      });
-
-    if (error) {
-      console.error('❌ Supabase upload error:', error);
-      return res.status(500).json({
-        success: false,
-        message: 'Failed to upload to storage: ' + error.message
-      });
-    }
-
-    // Get public URL
-    const { data: publicUrlData } = supabase.storage
-      .from(BUCKET_NAME)
-      .getPublicUrl(filePath);
-
-    const imageUrl = publicUrlData.publicUrl;
-
-    console.log(`✅ Image uploaded successfully: ${imageUrl}`);
+    // Build full URL (considering proxy/headers)
+    const protocol = req.protocol;
+    const host = req.get('host');
+    const imageUrl = `${protocol}://${host}/uploads/${fileName}`;
 
     res.json({
       success: true,
@@ -4080,13 +4037,16 @@ app.post('/api/upload/image', authenticateToken, uploadImage.single('image'), as
       message: 'Image uploaded successfully'
     });
   } catch (error) {
-    console.error('❌ Upload error:', error);
-    res.status(500).json({
-      success: false,
+    console.error('Upload error:', error);
+    res.status(500).json({ 
+      success: false, 
       message: error.message || 'Failed to upload image'
     });
   }
 });
+
+// Serve static files from uploads directory
+app.use('/uploads', express.static(uploadsDir));
 
 // ============================================
 // TEACHER DEBUG ENDPOINT
