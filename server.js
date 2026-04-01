@@ -2623,6 +2623,7 @@ app.post('/api/quiz/:quizId/submit', authenticateToken, async (req, res) => {
   }
 });
 
+
 // Get learner's quiz history (updated to include marks and feedback)
 app.get('/api/quiz/history', authenticateToken, async (req, res) => {
   try {
