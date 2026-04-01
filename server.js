@@ -70,7 +70,8 @@ const corsOptions = {
       'https://eduportal-frontend.vercel.app',
       'https://eduportal-frontend.netlify.app',
       'https://progresssec.netlify.app',
-      'https://progressec.vercel.app',
+      'https://progresssec.vercel.app',
+      
       
       ...(process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : [])
     ];
