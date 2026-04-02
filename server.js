@@ -1726,6 +1726,10 @@ app.post('/api/admin/grade', authenticateToken, authenticateAdmin, async (req, r
   }
 });
 
+app.get('/api/quiz/ping', authenticateToken, (req, res) => {
+  res.json({ success: true, message: 'Quiz routes are alive' });
+});
+
 // ============================================
 // QUIZ SYSTEM ENDPOINTS (updated for marks & feedback)
 // ============================================
