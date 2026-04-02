@@ -4,7 +4,7 @@ const jwt = require('jsonwebtoken');
  * Main authentication middleware
  * Verifies JWT token and attaches user info to request
  */
-const auth = (req, res, next) => {
+const authMiddleware = (req, res, next) => {
   try {
     // Get token from Authorization header or cookie
     const token = req.headers.authorization?.split(' ')[1] || req.cookies?.token;
@@ -70,6 +70,7 @@ const requireAdmin = (req, res, next) => {
 
 /**
  * Role-based middleware - Teacher only
+ * Alias: teacherMiddleware (for clarity in teacher routes)
  */
 const requireTeacher = (req, res, next) => {
   if (!req.user) {
@@ -87,6 +88,9 @@ const requireTeacher = (req, res, next) => {
   }
   next();
 };
+
+// Alias for teacher middleware (matches naming in teacher routes)
+const teacherMiddleware = requireTeacher;
 
 /**
  * Role-based middleware - Learner only
@@ -163,9 +167,12 @@ const getUserFromToken = (token) => {
   }
 };
 
-module.exports = auth;
+// Export all middlewares
+module.exports = authMiddleware;
+module.exports.authMiddleware = authMiddleware;
 module.exports.requireAdmin = requireAdmin;
 module.exports.requireTeacher = requireTeacher;
+module.exports.teacherMiddleware = teacherMiddleware;  // Alias for requireTeacher
 module.exports.requireLearner = requireLearner;
 module.exports.requireAnyRole = requireAnyRole;
 module.exports.optionalAuth = optionalAuth;
