@@ -3188,69 +3188,58 @@ app.delete('/api/teacher/remove-learner/:learnerId', authenticateToken, async (r
   }
 });
 
-// GET /api/teacher/reports - Fetch reports for this teacher's class
+
+// GET /api/teacher/reports - safe version
 app.get('/api/teacher/reports', authenticateToken, async (req, res) => {
   try {
     const teacherId = req.user.id;
 
-    // Get teacher's assigned class
+    // 1. Get teacher's class
     const { data: teacher, error: teacherError } = await supabase
       .from('users')
       .select('class_id')
       .eq('id', teacherId)
       .maybeSingle();
-
     if (teacherError) throw teacherError;
+    if (!teacher?.class_id) return res.json({ success: true, data: [] });
 
-    if (!teacher?.class_id) {
-      return res.json({ success: true, data: [] });
-    }
-
-    // Get all learners in this class (accepted learners only)
+    // 2. Get all accepted learners in that class
     const { data: learners, error: learnersError } = await supabase
       .from('learners')
       .select('id')
       .eq('class_id', teacher.class_id)
       .eq('is_accepted_by_teacher', true);
-
     if (learnersError) throw learnersError;
-
     const learnerIds = learners?.map(l => l.id) || [];
-    if (learnerIds.length === 0) {
-      return res.json({ success: true, data: [] });
-    }
+    if (learnerIds.length === 0) return res.json({ success: true, data: [] });
 
-    // Fetch reports for those learners
+    // 3. Fetch reports for those learners (no class_id assumption)
     const { data: reports, error: reportsError } = await supabase
       .from('reports')
       .select('*')
       .in('learner_id', learnerIds)
       .order('created_at', { ascending: false });
-
     if (reportsError) throw reportsError;
 
-    // Also fetch learner names separately (optional, but we can do a join)
-    // To avoid N+1, we'll do a second query for learner names
-    const { data: learnerDetails, error: learnerDetailsError } = await supabase
+    // 4. Fetch learner names separately
+    const { data: learnerDetails, error: detailsError } = await supabase
       .from('learners')
       .select('id, name, reg_number')
       .in('id', learnerIds);
-
-    if (learnerDetailsError) throw learnerDetailsError;
-
+    if (detailsError) throw detailsError;
     const learnerMap = {};
     learnerDetails?.forEach(l => { learnerMap[l.id] = { name: l.name, reg_number: l.reg_number }; });
 
-    // Attach learner info to each report
-    const enrichedReports = (reports || []).map(report => ({
-      ...report,
-      learner_name: learnerMap[report.learner_id]?.name || 'Unknown',
-      learner_reg: learnerMap[report.learner_id]?.reg_number || 'N/A'
+    // 5. Enrich reports
+    const enriched = (reports || []).map(r => ({
+      ...r,
+      learner_name: learnerMap[r.learner_id]?.name || 'Unknown',
+      learner_reg: learnerMap[r.learner_id]?.reg_number || 'N/A'
     }));
 
-    res.json({ success: true, data: enrichedReports });
+    res.json({ success: true, data: enriched });
   } catch (error) {
-    console.error('Error fetching teacher reports:', error);
+    console.error('Error fetching reports:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 });
