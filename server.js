@@ -3188,99 +3188,70 @@ app.delete('/api/teacher/remove-learner/:learnerId', authenticateToken, async (r
   }
 });
 
+// GET /api/teacher/reports - Fetch reports for this teacher's class
 app.get('/api/teacher/reports', authenticateToken, async (req, res) => {
   try {
-    console.log('📋 Fetching reports for teacher:', req.user.id);
-    
+    const teacherId = req.user.id;
+
+    // Get teacher's assigned class
     const { data: teacher, error: teacherError } = await supabase
       .from('users')
       .select('class_id')
-      .eq('id', req.user.id)
+      .eq('id', teacherId)
       .maybeSingle();
-    
+
     if (teacherError) throw teacherError;
-    
+
     if (!teacher?.class_id) {
-      return res.json({
-        success: true,
-        data: []
-      });
+      return res.json({ success: true, data: [] });
     }
-    
-    const { data: reports, error } = await supabase
-      .from('reports')
-      .select(`
-        *,
-        learner:learner_id(id, name, reg_number)
-      `)
+
+    // Get all learners in this class (accepted learners only)
+    const { data: learners, error: learnersError } = await supabase
+      .from('learners')
+      .select('id')
       .eq('class_id', teacher.class_id)
-      .order('created_at', { ascending: false });
-    
-    if (error) {
-      const { data: learners, error: learnersError } = await supabase
-        .from('learners')
-        .select('id')
-        .eq('class_id', teacher.class_id);
-      
-      if (learnersError) throw learnersError;
-      
-      const learnerIds = learners?.map(l => l.id) || [];
-      
-      const { data: altReports, error: altError } = await supabase
-        .from('reports')
-        .select(`
-          *,
-          learner:learner_id(id, name, reg_number)
-        `)
-        .in('learner_id', learnerIds)
-        .order('created_at', { ascending: false });
-      
-      if (altError) throw altError;
-      
-      const formattedAltReports = (altReports || []).map(report => ({
-        id: report.id,
-        learner_id: report.learner_id,
-        learner_name: report.learner?.name || 'Unknown',
-        learner_reg: report.learner?.reg_number || 'N/A',
-        term: report.term,
-        academic_year: report.academic_year || new Date().getFullYear(),
-        form: report.form,
-        subjects: report.subjects || [],
-        comment: report.comment,
-        created_at: report.created_at
-      }));
-      
-      return res.json({
-        success: true,
-        data: formattedAltReports
-      });
+      .eq('is_accepted_by_teacher', true);
+
+    if (learnersError) throw learnersError;
+
+    const learnerIds = learners?.map(l => l.id) || [];
+    if (learnerIds.length === 0) {
+      return res.json({ success: true, data: [] });
     }
-    
-    const formattedReports = (reports || []).map(report => ({
-      id: report.id,
-      learner_id: report.learner_id,
-      learner_name: report.learner?.name || 'Unknown',
-      learner_reg: report.learner?.reg_number || 'N/A',
-      term: report.term,
-      academic_year: report.academic_year || new Date().getFullYear(),
-      form: report.form,
-      subjects: report.subjects || [],
-      comment: report.comment,
-      created_at: report.created_at,
-      class_name: report.class?.name
+
+    // Fetch reports for those learners
+    const { data: reports, error: reportsError } = await supabase
+      .from('reports')
+      .select('*')
+      .in('learner_id', learnerIds)
+      .order('created_at', { ascending: false });
+
+    if (reportsError) throw reportsError;
+
+    // Also fetch learner names separately (optional, but we can do a join)
+    // To avoid N+1, we'll do a second query for learner names
+    const { data: learnerDetails, error: learnerDetailsError } = await supabase
+      .from('learners')
+      .select('id, name, reg_number')
+      .in('id', learnerIds);
+
+    if (learnerDetailsError) throw learnerDetailsError;
+
+    const learnerMap = {};
+    learnerDetails?.forEach(l => { learnerMap[l.id] = { name: l.name, reg_number: l.reg_number }; });
+
+    // Attach learner info to each report
+    const enrichedReports = (reports || []).map(report => ({
+      ...report,
+      learner_name: learnerMap[report.learner_id]?.name || 'Unknown',
+      learner_reg: learnerMap[report.learner_id]?.reg_number || 'N/A'
     }));
-    
-    res.json({
-      success: true,
-      data: formattedReports
-    });
-    
-  } catch (err) {
-    console.error('Error fetching teacher reports:', err);
-    res.status(500).json({
-      success: false,
-      message: 'Database error: ' + err.message
-    });
+
+    res.json({ success: true, data: enrichedReports });
+  } catch (error) {
+    console.error('Error fetching teacher reports:', error);
+    res.status(500).json({ success: false, message: error.message });
   }
 });
 
