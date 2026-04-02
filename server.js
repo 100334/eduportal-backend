@@ -2529,7 +2529,6 @@ app.post('/api/quiz/:quizId/save-answer', authenticateToken, async (req, res) =>
 });
 
 // Submit quiz answers (updated to return marks_earned and total_marks)
-// Submit quiz answers (updated to return marks_earned and total_marks)
 app.post('/api/quiz/:quizId/submit', authenticateToken, async (req, res) => {
   try {
     const { quizId } = req.params;
@@ -2709,8 +2708,16 @@ app.get('/api/quiz/attempt/:attemptId', authenticateToken, async (req, res) => {
     const { data: attempt, error } = await supabase
       .from('quiz_attempts')
       .select(`
-        *,
-        quiz:quizzes (id, title, subject, total_marks, passing_points)
+        id,
+        quiz_id,
+        earned_points,
+        total_points,
+        percentage,
+        passed,
+        completed_at,
+        feedback,
+        answers,
+        quizzes (id, title, subject, total_marks)
       `)
       .eq('id', attemptId)
       .eq('learner_id', learnerId)
@@ -2725,28 +2732,45 @@ app.get('/api/quiz/attempt/:attemptId', authenticateToken, async (req, res) => {
     if (typeof answers === 'string') {
       try { answers = JSON.parse(answers); } catch { answers = []; }
     }
+    if (!Array.isArray(answers)) answers = [];
+
+    // Format each answer to match frontend expectations
+    const formattedAnswers = answers.map((ans, idx) => ({
+      question_id: ans.question_id || idx,
+      question_text: ans.question_text || '',
+      question_type: ans.question_type || 'multiple_choice',
+      selected_answer: ans.selected_answer,
+      selected_answer_text: ans.selected_answer_text || 'Not answered',
+      is_correct: ans.is_correct || false,
+      points_obtained: ans.points_obtained || 0,
+      max_points: ans.max_points || 1,
+      correct_answer: ans.correct_answer || '',
+      explanation: ans.explanation || null,
+      feedback: ans.feedback || null
+    }));
 
     res.json({
       success: true,
       attempt: {
         id: attempt.id,
         quiz_id: attempt.quiz_id,
-        quiz_title: attempt.quiz?.title,
-        subject: attempt.quiz?.subject,
+        quiz_title: attempt.quizzes?.title || 'Quiz',
+        subject: attempt.quizzes?.subject,
         earned_points: attempt.earned_points,
         total_points: attempt.total_points,
         percentage: attempt.percentage,
         passed: attempt.passed,
         completed_at: attempt.completed_at,
-        answers: answers, // array of graded answers
+        answers: formattedAnswers,
         feedback: attempt.feedback
       }
     });
   } catch (error) {
-    console.error(error);
+    console.error('Error fetching attempt details:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 });
+
 // Get learner's quiz history (updated to include marks and feedback)
 app.get('/api/quiz/history', authenticateToken, async (req, res) => {
   try {
