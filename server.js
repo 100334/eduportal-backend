@@ -2489,6 +2489,10 @@ app.post('/api/quiz/:quizId/save-answer', authenticateToken, async (req, res) =>
   }
 });
 
+app.get('/api/quiz/test', authenticateToken, (req, res) => {
+  res.json({ success: true, message: 'Quiz routes are mounted' });
+});
+
 // Submit quiz answers (updated to return marks_earned and total_marks)
 app.post('/api/quiz/:quizId/submit', authenticateToken, async (req, res) => {
   try {
