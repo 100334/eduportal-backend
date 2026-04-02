@@ -3310,6 +3310,126 @@ app.post('/api/teacher/reports', authenticateToken, async (req, res) => {
   }
 });
 
+// ============================================
+// ** NEW: UPDATE REPORT (PUT) **
+// ============================================
+app.put('/api/teacher/reports/:id', authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const {
+      learnerId,
+      term,
+      form,
+      subjects,
+      best_subjects,
+      total_points,
+      english_passed,
+      final_status,
+      comment,
+      assessment_type_id,
+      academic_year
+    } = req.body;
+
+    console.log(`✏️ Updating report ${id} for teacher ${req.user.id}`);
+
+    // First, verify the report exists and belongs to this teacher's class
+    const { data: existing, error: fetchError } = await supabase
+      .from('reports')
+      .select('id, learner_id, class_id')
+      .eq('id', id)
+      .maybeSingle();
+
+    if (fetchError || !existing) {
+      console.error('Report not found or fetch error:', fetchError);
+      return res.status(404).json({
+        success: false,
+        message: 'Report not found'
+      });
+    }
+
+    // Verify teacher has access to this learner's class
+    const { data: teacher, error: teacherError } = await supabase
+      .from('users')
+      .select('class_id')
+      .eq('id', req.user.id)
+      .maybeSingle();
+
+    if (teacherError || !teacher) {
+      return res.status(403).json({
+        success: false,
+        message: 'Teacher not found'
+      });
+    }
+
+    if (teacher.class_id !== existing.class_id) {
+      return res.status(403).json({
+        success: false,
+        message: 'You do not have permission to edit this report'
+      });
+    }
+
+    // Build update object
+    const updates = {};
+    if (learnerId !== undefined) updates.learner_id = parseInt(learnerId);
+    if (term !== undefined) updates.term = term;
+    if (form !== undefined) updates.form = form;
+    if (subjects !== undefined) updates.subjects = subjects;
+    if (best_subjects !== undefined) updates.best_subjects = best_subjects;
+    if (total_points !== undefined) updates.total_points = total_points;
+    if (english_passed !== undefined) updates.english_passed = english_passed;
+    if (final_status !== undefined) updates.final_status = final_status;
+    if (comment !== undefined) updates.comment = comment;
+    if (assessment_type_id !== undefined) updates.assessment_type_id = assessment_type_id;
+    if (academic_year !== undefined) updates.academic_year = academic_year;
+    updates.updated_at = new Date().toISOString();
+
+    // Recalculate average and grade if subjects changed
+    if (subjects && Array.isArray(subjects) && subjects.length > 0) {
+      const totalScore = subjects.reduce((sum, s) => sum + (s.score || 0), 0);
+      const averageScore = Math.round(totalScore / subjects.length);
+      updates.average_score = averageScore;
+      updates.total_score = totalScore;
+
+      let grade = 'F';
+      if (averageScore >= 75) grade = 'A';
+      else if (averageScore >= 65) grade = 'B';
+      else if (averageScore >= 55) grade = 'C';
+      else if (averageScore >= 40) grade = 'D';
+      updates.grade = grade;
+    }
+
+    // Perform the update
+    const { data: updatedReport, error: updateError } = await supabase
+      .from('reports')
+      .update(updates)
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (updateError) {
+      console.error('Update error:', updateError);
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to update report: ' + updateError.message
+      });
+    }
+
+    console.log('✅ Report updated successfully:', updatedReport.id);
+
+    res.json({
+      success: true,
+      message: 'Report updated successfully',
+      report: updatedReport
+    });
+  } catch (err) {
+    console.error('Error updating report:', err);
+    res.status(500).json({
+      success: false,
+      message: 'Server error: ' + err.message
+    });
+  }
+});
+
 app.delete('/api/teacher/reports/:reportId', authenticateToken, async (req, res) => {
   try {
     const { reportId } = req.params;
@@ -4358,6 +4478,7 @@ app.listen(PORT, () => {
   console.log('   DELETE /api/teacher/remove-learner/:id');
   console.log('   GET    /api/teacher/reports');
   console.log('   POST   /api/teacher/reports');
+  console.log('   PUT    /api/teacher/reports/:id');        // ** NEW **
   console.log('   DELETE /api/teacher/reports/:id');
   console.log('   GET    /api/teacher/attendance');
   console.log('   POST   /api/teacher/attendance');
