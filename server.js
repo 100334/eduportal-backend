@@ -52,7 +52,6 @@ const supabase = createClient(
   }
 })();
 
-// Make supabase available globally
 app.locals.supabase = supabase;
 
 // Security middleware
@@ -2699,7 +2698,9 @@ app.post('/api/quiz/:quizId/submit', authenticateToken, async (req, res) => {
   }
 });
 
-// Get full details of a specific quiz attempt (for revision)
+// ============================================
+// NEW ENDPOINT: Get full details of a specific quiz attempt (for revision)
+// ============================================
 app.get('/api/quiz/attempt/:attemptId', authenticateToken, async (req, res) => {
   try {
     const { attemptId } = req.params;
@@ -3257,7 +3258,6 @@ app.delete('/api/teacher/remove-learner/:learnerId', authenticateToken, async (r
     });
   }
 });
-
 
 // GET /api/teacher/reports - safe version
 app.get('/api/teacher/reports', authenticateToken, async (req, res) => {
@@ -4533,6 +4533,7 @@ app.use((err, req, res, next) => {
     error: process.env.NODE_ENV === 'development' ? err.message : undefined
   });
 });
+
 
 // ============================================
 // START SERVER
