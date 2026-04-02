@@ -357,9 +357,10 @@ app.post('/api/auth/learner/login', async (req, res) => {
     
     let learner = null;
     
+    // Explicitly select only needed columns (including integer id)
     const { data: flexibleMatch, error: flexibleError } = await supabase
       .from('learners')
-      .select('*')
+      .select('id, name, reg_number, form, status')   // <-- explicit columns
       .ilike('name', `%${normalizedName}%`)
       .ilike('reg_number', `%${normalizedReg}%`)
       .eq('status', 'Active')
@@ -367,20 +368,20 @@ app.post('/api/auth/learner/login', async (req, res) => {
     
     if (!flexibleError && flexibleMatch) {
       learner = flexibleMatch;
-      console.log('✅ Found learner:', learner.name);
+      console.log('✅ Found learner (flexible):', learner.name, 'ID:', learner.id, 'type:', typeof learner.id);
     }
     
     if (!learner) {
       const { data: exactMatch, error: exactError } = await supabase
         .from('learners')
-        .select('*')
+        .select('id, name, reg_number, form, status')   // <-- explicit columns
         .eq('name', name?.trim())
         .eq('reg_number', regNumber?.trim())
         .maybeSingle();
       
       if (!exactError && exactMatch) {
         learner = exactMatch;
-        console.log('✅ Found learner with exact match:', learner.name);
+        console.log('✅ Found learner (exact):', learner.name, 'ID:', learner.id, 'type:', typeof learner.id);
       }
     }
     
@@ -392,17 +393,23 @@ app.post('/api/auth/learner/login', async (req, res) => {
       });
     }
     
+    // Ensure id is integer (Supabase returns number for integer column)
+    const learnerId = learner.id; // should be number, e.g., 41
+    
+    // Create token with integer id
     const token = Buffer.from(JSON.stringify({ 
-      id: learner.id, 
+      id: learnerId, 
       name: learner.name, 
       role: 'learner' 
     })).toString('base64');
+    
+    console.log('✅ Token created with id:', learnerId, typeof learnerId);
     
     res.json({
       success: true,
       token,
       user: {
-        id: learner.id,
+        id: learnerId,
         name: learner.name,
         reg: learner.reg_number,
         form: learner.form,
