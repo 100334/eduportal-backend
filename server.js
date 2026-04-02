@@ -2700,7 +2700,53 @@ app.post('/api/quiz/:quizId/submit', authenticateToken, async (req, res) => {
   }
 });
 
+// Get full details of a specific quiz attempt (for revision)
+app.get('/api/quiz/attempt/:attemptId', authenticateToken, async (req, res) => {
+  try {
+    const { attemptId } = req.params;
+    const learnerId = req.user.id;
 
+    const { data: attempt, error } = await supabase
+      .from('quiz_attempts')
+      .select(`
+        *,
+        quiz:quizzes (id, title, subject, total_marks, passing_points)
+      `)
+      .eq('id', attemptId)
+      .eq('learner_id', learnerId)
+      .single();
+
+    if (error || !attempt) {
+      return res.status(404).json({ success: false, message: 'Attempt not found' });
+    }
+
+    // Parse answers if stored as JSON string
+    let answers = attempt.answers;
+    if (typeof answers === 'string') {
+      try { answers = JSON.parse(answers); } catch { answers = []; }
+    }
+
+    res.json({
+      success: true,
+      attempt: {
+        id: attempt.id,
+        quiz_id: attempt.quiz_id,
+        quiz_title: attempt.quiz?.title,
+        subject: attempt.quiz?.subject,
+        earned_points: attempt.earned_points,
+        total_points: attempt.total_points,
+        percentage: attempt.percentage,
+        passed: attempt.passed,
+        completed_at: attempt.completed_at,
+        answers: answers, // array of graded answers
+        feedback: attempt.feedback
+      }
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
 // Get learner's quiz history (updated to include marks and feedback)
 app.get('/api/quiz/history', authenticateToken, async (req, res) => {
   try {
