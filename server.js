@@ -1565,6 +1565,40 @@ app.delete('/api/admin/subjects/:subjectId', authenticateToken, authenticateAdmi
   }
 });
 
+// Get unread notifications for admin
+app.get('/api/admin/notifications', authenticateToken, authenticateAdmin, async (req, res) => {
+  try {
+    const { data: notifications, error } = await supabase
+      .from('notifications')
+      .select('*')
+      .eq('user_id', req.user.id)
+      .eq('is_read', false)
+      .order('created_at', { ascending: false });
+
+    if (error) throw error;
+    res.json({ success: true, notifications: notifications || [] });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Mark notification as read
+app.put('/api/admin/notifications/:id/read', authenticateToken, authenticateAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { error } = await supabase
+      .from('notifications')
+      .update({ is_read: true, updated_at: new Date().toISOString() })
+      .eq('id', id)
+      .eq('user_id', req.user.id);
+
+    if (error) throw error;
+    res.json({ success: true, message: 'Notification marked as read' });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 // ============================================
 // ADMIN QUIZ GRADING ENDPOINTS
 // ============================================
