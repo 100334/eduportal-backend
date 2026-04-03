@@ -10,6 +10,9 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs').promises;
 const crypto = require('crypto');
+const uploadRoutes = require('./routes/upload');
+
+
 
 // Load environment variables
 dotenv.config();
@@ -106,7 +109,7 @@ const authLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false
 });
-
+app.use('/api', uploadRoutes);   // Now /api/upload is active
 app.use('/api', apiLimiter);
 app.use('/api/auth', authLimiter);
 
