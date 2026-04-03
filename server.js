@@ -2722,11 +2722,15 @@ app.post('/api/quiz/:quizId/submit', authenticateToken, async (req, res) => {
 // ============================================
 // NEW ENDPOINT: Get full details of a specific quiz attempt (for revision)
 // ============================================
+// Get full details of a specific quiz attempt (for revision)
 app.get('/api/quiz/attempt/:attemptId', authenticateToken, async (req, res) => {
   try {
     const { attemptId } = req.params;
     const learnerId = req.user.id;
 
+    console.log(`📝 Fetching attempt details for attemptId: ${attemptId}, learner: ${learnerId}`);
+
+    // Fetch attempt with quiz info
     const { data: attempt, error } = await supabase
       .from('quiz_attempts')
       .select(`
@@ -2738,25 +2742,36 @@ app.get('/api/quiz/attempt/:attemptId', authenticateToken, async (req, res) => {
         passed,
         completed_at,
         feedback,
-        answers,
-        quizzes (id, title, subject, total_marks)
+        answers
       `)
       .eq('id', attemptId)
       .eq('learner_id', learnerId)
       .single();
 
     if (error || !attempt) {
+      console.error('Error fetching attempt:', error);
       return res.status(404).json({ success: false, message: 'Attempt not found' });
+    }
+
+    // Fetch quiz title separately
+    const { data: quiz, error: quizError } = await supabase
+      .from('quizzes')
+      .select('title, subject')
+      .eq('id', attempt.quiz_id)
+      .single();
+
+    if (quizError) {
+      console.error('Error fetching quiz:', quizError);
     }
 
     // Parse answers if stored as JSON string
     let answers = attempt.answers;
     if (typeof answers === 'string') {
-      try { answers = JSON.parse(answers); } catch { answers = []; }
+      try { answers = JSON.parse(answers); } catch (e) { answers = []; }
     }
     if (!Array.isArray(answers)) answers = [];
 
-    // Format each answer to match frontend expectations
+    // Format each answer
     const formattedAnswers = answers.map((ans, idx) => ({
       question_id: ans.question_id || idx,
       question_text: ans.question_text || '',
@@ -2776,15 +2791,15 @@ app.get('/api/quiz/attempt/:attemptId', authenticateToken, async (req, res) => {
       attempt: {
         id: attempt.id,
         quiz_id: attempt.quiz_id,
-        quiz_title: attempt.quizzes?.title || 'Quiz',
-        subject: attempt.quizzes?.subject,
-        earned_points: attempt.earned_points,
-        total_points: attempt.total_points,
-        percentage: attempt.percentage,
-        passed: attempt.passed,
+        quiz_title: quiz?.title || 'Quiz',
+        subject: quiz?.subject || null,
+        earned_points: attempt.earned_points || 0,
+        total_points: attempt.total_points || 0,
+        percentage: attempt.percentage || 0,
+        passed: attempt.passed || false,
         completed_at: attempt.completed_at,
         answers: formattedAnswers,
-        feedback: attempt.feedback
+        feedback: attempt.feedback || null
       }
     });
   } catch (error) {
