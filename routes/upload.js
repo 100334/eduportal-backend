@@ -1,30 +1,50 @@
-// backend/routes/upload.js
 const express = require('express');
 const multer = require('multer');
 const cloudinary = require('cloudinary').v2;
-const { CloudinaryStorage } = require('multer-storage-cloudinary');
+const stream = require('stream');
 
 const router = express.Router();
 
-cloudinary.config({
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-  api_key: process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET,
+// Cloudinary reads from CLOUDINARY_URL automatically
+cloudinary.config();
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith('image/')) cb(null, true);
+    else cb(new Error('Only images are allowed'), false);
+  }
 });
 
-const storage = new CloudinaryStorage({
-  cloudinary,
-  params: {
-    folder: 'quiz_images',
-    allowed_formats: ['jpg', 'png', 'jpeg', 'webp'],
-  },
-});
+router.post('/upload', upload.single('image'), async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: 'No file uploaded' });
+  }
 
-const upload = multer({ storage });
+  try {
+    // Upload buffer directly to Cloudinary
+    const result = await new Promise((resolve, reject) => {
+      const uploadStream = cloudinary.uploader.upload_stream(
+        {
+          folder: 'quiz_images',
+          allowed_formats: ['jpg', 'png', 'jpeg', 'webp']
+        },
+        (error, result) => {
+          if (error) reject(error);
+          else resolve(result);
+        }
+      );
+      const bufferStream = new stream.PassThrough();
+      bufferStream.end(req.file.buffer);
+      bufferStream.pipe(uploadStream);
+    });
 
-router.post('/upload', upload.single('image'), (req, res) => {
-  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
-  res.json({ imageUrl: req.file.path });
+    res.json({ imageUrl: result.secure_url });
+  } catch (error) {
+    console.error('Cloudinary upload error:', error);
+    res.status(500).json({ error: 'Upload failed' });
+  }
 });
 
 module.exports = router;
