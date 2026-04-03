@@ -2629,6 +2629,9 @@ app.post('/api/quiz/:quizId/submit', authenticateToken, async (req, res) => {
       gradedAnswers.push({
         question_id: question.id,
         question_text: question.question_text,
+        question_image: question.question_image || null,       // <-- ADD
+        option_images: question.option_images || [],           // <-- ADD (for multiple choice)
+        answer_image: question.answer_image || null,  
         question_type: question.question_type,
         selected_answer: userAnswer,
         selected_answer_text: userAnswerText || 'Not answered',
@@ -2775,6 +2778,9 @@ app.get('/api/quiz/attempt/:attemptId', authenticateToken, async (req, res) => {
     const formattedAnswers = answers.map((ans, idx) => ({
       question_id: ans.question_id || idx,
       question_text: ans.question_text || '',
+      question_image: ans.question_image || null,     // <-- ADD
+      option_images: ans.option_images || [],         // <-- ADD
+      answer_image: ans.answer_image || null,  
       question_type: ans.question_type || 'multiple_choice',
       selected_answer: ans.selected_answer,
       selected_answer_text: ans.selected_answer_text || 'Not answered',
