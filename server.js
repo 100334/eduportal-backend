@@ -1986,18 +1986,29 @@ app.get('/api/admin/quizzes/:quizId/questions', authenticateToken, authenticateA
   }
 });
 
-// Add question to quiz (admin)
 app.post('/api/admin/quizzes/:quizId/questions', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
     const { quizId } = req.params;
-    const { question_text, options, correct_answer, explanation, marks, display_order, question_type, expected_answer } = req.body;
+    const { 
+      question_text, 
+      options, 
+      correct_answer, 
+      explanation, 
+      marks, 
+      display_order, 
+      question_type, 
+      expected_answer,
+      question_image,        // <-- NEW
+      option_images,         // <-- NEW
+      answer_image           // <-- NEW
+    } = req.body;
     
     console.log(`📝 Adding ${question_type || 'multiple_choice'} question to quiz: ${quizId}`);
 
-    if (!question_text) {
+    if (!question_text && !question_image) {
       return res.status(400).json({ 
         success: false, 
-        message: 'Question text is required' 
+        message: 'Either question text or an image is required' 
       });
     }
 
@@ -2025,6 +2036,7 @@ app.post('/api/admin/quizzes/:quizId/questions', authenticateToken, authenticate
       }
     }
 
+    // Verify quiz exists
     const { data: quiz, error: quizError } = await supabase
       .from('quizzes')
       .select('id, title, total_marks')
@@ -2038,6 +2050,7 @@ app.post('/api/admin/quizzes/:quizId/questions', authenticateToken, authenticate
       });
     }
 
+    // Determine display order
     let finalDisplayOrder = display_order;
     if (!finalDisplayOrder) {
       const { data: maxOrder } = await supabase
@@ -2054,7 +2067,10 @@ app.post('/api/admin/quizzes/:quizId/questions', authenticateToken, authenticate
 
     const questionData = {
       quiz_id: quizId,
-      question_text: question_text,
+      question_text: question_text || null,
+      question_image: question_image || null,     // <-- NEW
+      option_images: option_images || [],         // <-- NEW
+      answer_image: answer_image || null,         // <-- NEW
       question_type: qType,
       marks: questionMarks,
       points: questionMarks,
@@ -2069,7 +2085,7 @@ app.post('/api/admin/quizzes/:quizId/questions', authenticateToken, authenticate
     } else {
       questionData.options = null;
       questionData.correct_answer = null;
-      questionData.expected_answer = expected_answer.trim().toLowerCase();
+      questionData.expected_answer = expected_answer?.trim().toLowerCase() || null;
     }
 
     const { data: question, error } = await supabase
@@ -2086,6 +2102,7 @@ app.post('/api/admin/quizzes/:quizId/questions', authenticateToken, authenticate
       });
     }
 
+    // Update total marks for the quiz
     const { data: questions } = await supabase
       .from('quiz_questions')
       .select('marks')
