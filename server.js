@@ -1612,9 +1612,7 @@ app.get('/api/admin/quizzes/:quizId/submissions', authenticateToken, authenticat
   try {
     const { quizId } = req.params;
 
-    console.log(`📋 Admin fetching submissions for quiz: ${quizId}`);
-
-    // Fetch all completed attempts for this quiz
+    // 1. Get all completed attempts for the quiz
     const { data: attempts, error } = await supabase
       .from('quiz_attempts')
       .select('*')
@@ -1622,44 +1620,30 @@ app.get('/api/admin/quizzes/:quizId/submissions', authenticateToken, authenticat
       .eq('status', 'completed')
       .order('completed_at', { ascending: false });
 
-    if (error) {
-      console.error('Error fetching submissions:', error);
-      return res.status(500).json({ success: false, message: error.message });
-    }
-
+    if (error) throw error;
     if (!attempts || attempts.length === 0) {
       return res.json({ success: true, submissions: [] });
     }
 
-    // Collect unique learner IDs
-    const learnerIds = [...new Set(attempts.map(a => a.learner_id).filter(Boolean))];
-    
-    // Fetch learner details separately
-    let learnersMap = {};
-    if (learnerIds.length > 0) {
-      const { data: learners, error: learnerError } = await supabase
-        .from('learners')
-        .select('id, name, reg_number, form')
-        .in('id', learnerIds);
-      
-      if (!learnerError && learners) {
-        learnersMap = Object.fromEntries(learners.map(l => [l.id, l]));
-      }
+    // 2. Get learner details for all unique learner_ids
+    const learnerIds = [...new Set(attempts.map(a => a.learner_id))];
+    const { data: learners, error: learnerError } = await supabase
+      .from('learners')
+      .select('id, name, reg_number, form')
+      .in('id', learnerIds);
+
+    const learnerMap = {};
+    if (!learnerError && learners) {
+      learners.forEach(l => { learnerMap[l.id] = l; });
     }
 
-    // Format each attempt with per-question details
+    // 3. Format the response
     const formatted = attempts.map(attempt => {
       let answers = attempt.answers;
       if (typeof answers === 'string') {
-        try {
-          answers = JSON.parse(answers);
-        } catch (e) {
-          answers = [];
-        }
+        try { answers = JSON.parse(answers); } catch(e) { answers = []; }
       }
-      if (!Array.isArray(answers)) answers = [];
-
-      const learner = learnersMap[attempt.learner_id] || { name: 'Unknown', reg_number: 'N/A', form: 'N/A' };
+      const learner = learnerMap[attempt.learner_id] || { name: 'Unknown', reg_number: 'N/A', form: 'N/A' };
 
       return {
         id: attempt.id,
@@ -1669,7 +1653,7 @@ app.get('/api/admin/quizzes/:quizId/submissions', authenticateToken, authenticat
         earned_marks: attempt.earned_points || 0,
         total_marks: attempt.total_points || 0,
         submitted_at: attempt.completed_at,
-        answers: answers.map((ans, idx) => ({
+        answers: (answers || []).map((ans, idx) => ({
           question_index: idx,
           question_text: ans.question_text,
           question_type: ans.question_type,
@@ -1682,13 +1666,10 @@ app.get('/api/admin/quizzes/:quizId/submissions', authenticateToken, authenticat
       };
     });
 
-    res.json({
-      success: true,
-      submissions: formatted
-    });
-  } catch (error) {
-    console.error('Error in admin submissions endpoint:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.json({ success: true, submissions: formatted });
+  } catch (err) {
+    console.error('Error in /api/admin/quizzes/:quizId/submissions:', err);
+    res.status(500).json({ success: false, message: err.message });
   }
 });
 // Grade a submission (update marks and feedback per question)
