@@ -1607,6 +1607,7 @@ app.put('/api/admin/notifications/:id/read', authenticateToken, authenticateAdmi
 // ============================================
 
 // Get all submissions for a quiz (for grading)
+// GET /api/admin/quizzes/:quizId/submissions - Fixed version without relationship assumption
 app.get('/api/admin/quizzes/:quizId/submissions', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
     const { quizId } = req.params;
@@ -1616,16 +1617,7 @@ app.get('/api/admin/quizzes/:quizId/submissions', authenticateToken, authenticat
     // Fetch all completed attempts for this quiz
     const { data: attempts, error } = await supabase
       .from('quiz_attempts')
-      .select(`
-        id,
-        learner_id,
-        answers,
-        earned_points,
-        total_points,
-        feedback,
-        completed_at,
-        learner:learners!learner_id(id, name, reg_number, form)
-      `)
+      .select('*')
       .eq('quiz_id', quizId)
       .eq('status', 'completed')
       .order('completed_at', { ascending: false });
@@ -1635,8 +1627,28 @@ app.get('/api/admin/quizzes/:quizId/submissions', authenticateToken, authenticat
       return res.status(500).json({ success: false, message: error.message });
     }
 
+    if (!attempts || attempts.length === 0) {
+      return res.json({ success: true, submissions: [] });
+    }
+
+    // Collect unique learner IDs
+    const learnerIds = [...new Set(attempts.map(a => a.learner_id).filter(Boolean))];
+    
+    // Fetch learner details separately
+    let learnersMap = {};
+    if (learnerIds.length > 0) {
+      const { data: learners, error: learnerError } = await supabase
+        .from('learners')
+        .select('id, name, reg_number, form')
+        .in('id', learnerIds);
+      
+      if (!learnerError && learners) {
+        learnersMap = Object.fromEntries(learners.map(l => [l.id, l]));
+      }
+    }
+
     // Format each attempt with per-question details
-    const formatted = (attempts || []).map(attempt => {
+    const formatted = attempts.map(attempt => {
       let answers = attempt.answers;
       if (typeof answers === 'string') {
         try {
@@ -1645,24 +1657,22 @@ app.get('/api/admin/quizzes/:quizId/submissions', authenticateToken, authenticat
           answers = [];
         }
       }
-
-      // Ensure answers is an array
       if (!Array.isArray(answers)) answers = [];
+
+      const learner = learnersMap[attempt.learner_id] || { name: 'Unknown', reg_number: 'N/A', form: 'N/A' };
 
       return {
         id: attempt.id,
-        student_name: attempt.learner?.name || 'Unknown',
-        student_reg: attempt.learner?.reg_number,
-        student_form: attempt.learner?.form,
+        student_name: learner.name,
+        student_reg: learner.reg_number,
+        student_form: learner.form,
         earned_marks: attempt.earned_points || 0,
         total_marks: attempt.total_points || 0,
-        feedback: attempt.feedback,
         submitted_at: attempt.completed_at,
         answers: answers.map((ans, idx) => ({
           question_index: idx,
           question_text: ans.question_text,
           question_type: ans.question_type,
-          selected_answer: ans.selected_answer,
           selected_answer_text: ans.selected_answer_text,
           is_correct: ans.is_correct,
           given_marks: ans.points_obtained,
@@ -1681,7 +1691,6 @@ app.get('/api/admin/quizzes/:quizId/submissions', authenticateToken, authenticat
     res.status(500).json({ success: false, message: error.message });
   }
 });
-
 // Grade a submission (update marks and feedback per question)
 app.post('/api/admin/grade', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
