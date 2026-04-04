@@ -1606,33 +1606,40 @@ app.put('/api/admin/notifications/:id/read', authenticateToken, authenticateAdmi
 // ADMIN QUIZ GRADING ENDPOINTS
 // ============================================
 
-// Get all submissions for a quiz (for grading)
+// GET /api/admin/quizzes/:quizId/submissions
 app.get('/api/admin/quizzes/:quizId/submissions', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
     const { quizId } = req.params;
-    // Convert to integer (since quizzes.id is integer)
+    // Convert to integer because quizzes.id is INTEGER in your DB
     const numericQuizId = parseInt(quizId, 10);
     if (isNaN(numericQuizId)) {
       return res.status(400).json({ success: false, message: 'Invalid quiz ID' });
     }
 
-    // Fetch all completed attempts – use numeric comparison
+    console.log(`📋 Admin fetching submissions for quiz ID: ${numericQuizId}`);
+
+    // Fetch all completed attempts for this quiz
     const { data: attempts, error } = await supabase
       .from('quiz_attempts')
       .select('*')
-      .eq('quiz_id', numericQuizId)  // now using integer
+      .eq('quiz_id', numericQuizId)
       .eq('status', 'completed')
       .order('completed_at', { ascending: false });
 
-    if (error) throw error;
+    if (error) {
+      console.error('Error fetching attempts:', error);
+      return res.status(500).json({ success: false, message: error.message });
+    }
+
     if (!attempts || attempts.length === 0) {
       return res.json({ success: true, submissions: [] });
     }
 
-    // Get learner details separately (avoids relationship issues)
-    const learnerIds = [...new Set(attempts.map(a => a.learner_id))];
+    // Get unique learner IDs
+    const learnerIds = [...new Set(attempts.map(a => a.learner_id).filter(Boolean))];
     let learnerMap = {};
-    if (learnerIds.length) {
+
+    if (learnerIds.length > 0) {
       const { data: learners, error: learnerErr } = await supabase
         .from('learners')
         .select('id, name, reg_number, form')
@@ -1648,6 +1655,8 @@ app.get('/api/admin/quizzes/:quizId/submissions', authenticateToken, authenticat
       if (typeof answers === 'string') {
         try { answers = JSON.parse(answers); } catch(e) { answers = []; }
       }
+      if (!Array.isArray(answers)) answers = [];
+
       const learner = learnerMap[attempt.learner_id] || { name: 'Unknown', reg_number: 'N/A', form: 'N/A' };
 
       return {
@@ -1658,8 +1667,9 @@ app.get('/api/admin/quizzes/:quizId/submissions', authenticateToken, authenticat
         earned_marks: attempt.earned_points || 0,
         total_marks: attempt.total_points || 0,
         submitted_at: attempt.completed_at,
-        answers: (answers || []).map((ans, idx) => ({
+        answers: answers.map((ans, idx) => ({
           question_index: idx,
+          question_id: ans.question_id,
           question_text: ans.question_text,
           question_type: ans.question_type,
           selected_answer_text: ans.selected_answer_text,
@@ -1673,31 +1683,27 @@ app.get('/api/admin/quizzes/:quizId/submissions', authenticateToken, authenticat
 
     res.json({ success: true, submissions: formatted });
   } catch (err) {
-    console.error('Submissions error:', err);
+    console.error('Submissions endpoint error:', err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
-// Grade a submission (update marks and feedback per question)
+
 app.post('/api/admin/grade', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
-    // Frontend sends: { attempt_id, answers: [{ question_id, marks_awarded, feedback }] }
-    const { attempt_id, answers } = req.body;
-    
+    const { attempt_id, answers } = req.body;  // frontend sends attempt_id and answers
+
     if (!attempt_id) {
       return res.status(400).json({ success: false, message: 'Missing attempt_id' });
     }
 
-    console.log(`📝 Grading submission attempt_id: ${attempt_id}`);
+    console.log(`📝 Grading attempt: ${attempt_id}`);
 
-    // Fetch current attempt (attempt_id could be integer or UUID)
-    let attemptQuery = supabase
+    // Fetch current attempt
+    const { data: attempt, error: fetchError } = await supabase
       .from('quiz_attempts')
-      .select('answers, earned_points, total_points, feedback')
-      .eq('id', attempt_id);
-    
-    // If attempt_id looks like a UUID string (contains hyphens), no conversion needed.
-    // If it's a number string, we treat it as integer.
-    const { data: attempt, error: fetchError } = await attemptQuery.single();
+      .select('answers, earned_points, total_points')
+      .eq('id', attempt_id)
+      .single();
 
     if (fetchError) {
       console.error('Error fetching attempt:', fetchError);
@@ -1706,22 +1712,17 @@ app.post('/api/admin/grade', authenticateToken, authenticateAdmin, async (req, r
 
     let currentAnswers = attempt.answers;
     if (typeof currentAnswers === 'string') {
-      try {
-        currentAnswers = JSON.parse(currentAnswers);
-      } catch (e) {
-        currentAnswers = [];
-      }
+      try { currentAnswers = JSON.parse(currentAnswers); } catch(e) { currentAnswers = []; }
     }
     if (!Array.isArray(currentAnswers)) currentAnswers = [];
 
     // Update each question with provided marks and feedback
-    const updatedAnswers = currentAnswers.map((ans) => {
-      // Find matching grade by question_id
+    const updatedAnswers = currentAnswers.map(ans => {
       const grade = answers.find(a => a.question_id === ans.question_id);
       if (grade) {
         return {
           ...ans,
-          points_obtained: grade.marks_awarded,   // frontend sends marks_awarded
+          points_obtained: grade.marks_awarded,
           feedback: grade.feedback || null
         };
       }
@@ -1747,14 +1748,6 @@ app.post('/api/admin/grade', authenticateToken, authenticateAdmin, async (req, r
       return res.status(500).json({ success: false, message: updateError.message });
     }
 
-    // Log the admin action
-    await logAdminAction(
-      req.user.id,
-      'GRADE_SUBMISSION',
-      `Graded quiz attempt ${attempt_id}. New marks: ${newEarnedMarks}/${totalMarks}`,
-      req.ip
-    );
-
     res.json({
       success: true,
       message: 'Grades saved successfully',
@@ -1762,7 +1755,7 @@ app.post('/api/admin/grade', authenticateToken, authenticateAdmin, async (req, r
       total_marks: totalMarks
     });
   } catch (error) {
-    console.error('Error in grade endpoint:', error);
+    console.error('Grade endpoint error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 });
