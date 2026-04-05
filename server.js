@@ -12,8 +12,6 @@ const fs = require('fs').promises;
 const crypto = require('crypto');
 const uploadRoutes = require('./routes/upload');
 
-
-
 // Load environment variables
 dotenv.config();
 
@@ -160,25 +158,23 @@ const authenticateAdmin = async (req, res, next) => {
 };
 
 /**
- * Quiz route param may be all-digit (integer PK) or UUID. Using parseInt() alone
- * breaks UUIDs (NaN or wrong number) and causes 400s in load/start flows.
+ * FIXED: quiz ID must be numeric (integer) because quizzes.id is INTEGER.
+ * Rejects UUIDs, strings, etc. with a clear 400 error.
  */
 function resolveQuizRouteId(quizIdParam) {
   const raw = String(quizIdParam ?? '').trim();
   if (!raw) {
-    return { ok: false, message: 'Invalid quiz ID format' };
+    return { ok: false, message: 'Missing quiz ID' };
   }
+  // Only accept positive integers
   if (/^\d+$/.test(raw)) {
-    return { ok: true, id: parseInt(raw, 10) };
+    const id = parseInt(raw, 10);
+    if (isNaN(id) || id <= 0) {
+      return { ok: false, message: 'Quiz ID must be a positive integer' };
+    }
+    return { ok: true, id: id };
   }
-  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(raw)) {
-    return { ok: true, id: raw };
-  }
-  // CUID / KSUID / nanoid / etc. (quizzes.id may not be int or RFC UUID)
-  if (/^[a-zA-Z0-9_-]+$/.test(raw) && raw.length <= 128) {
-    return { ok: true, id: raw };
-  }
-  return { ok: false, message: 'Invalid quiz ID format' };
+  return { ok: false, message: 'Invalid quiz ID format. Expected a numeric ID.' };
 }
 
 // Log admin action helper
@@ -2517,21 +2513,7 @@ app.post('/api/quiz/:quizId/start', authenticateToken, async (req, res) => {
     if (error) {
       console.error('Insert error (final):', error);
       const msg = error.message || '';
-      const idLooksUuid =
-        typeof numericQuizId === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(numericQuizId);
-      const typeMismatch =
-        idLooksUuid &&
-        (/invalid input syntax for type/i.test(msg) ||
-          /integer|bigint|numeric/i.test(msg));
-      if (typeMismatch) {
-        return res.status(500).json({
-          success: false,
-          message:
-            'Database mismatch: quizzes.id is UUID but quiz_attempts.quiz_id may still be integer. ' +
-            'In Supabase → SQL Editor, alter quiz_attempts.quiz_id to uuid and re-add the foreign key to quizzes(id), or recreate the column to match.',
-          code: error.code
-        });
-      }
+      // We no longer have a UUID mismatch because we already reject non-numeric IDs.
       return res.status(500).json({
         success: false,
         message: 'Failed to start quiz: ' + msg,
@@ -4689,7 +4671,6 @@ app.use((err, req, res, next) => {
     error: process.env.NODE_ENV === 'development' ? err.message : undefined
   });
 });
-
 
 // ============================================
 // START SERVER
