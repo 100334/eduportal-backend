@@ -2404,29 +2404,46 @@ app.get('/api/quiz/:quizId/questions', authenticateToken, async (req, res) => {
 app.post('/api/quiz/:quizId/start', authenticateToken, async (req, res) => {
   try {
     const { quizId } = req.params;
-    
-    console.log(`🎯 Starting quiz attempt for learner: ${req.user.id}, Quiz: ${quizId}`);
 
+    // Validate and convert to integer
+    const numericQuizId = parseInt(quizId, 10);
+    if (isNaN(numericQuizId)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid quiz ID format (must be an integer)'
+      });
+    }
+
+    console.log(`🎯 Starting quiz attempt for learner: ${req.user.id}, Quiz: ${numericQuizId}`);
+
+    // Fetch quiz using numeric ID
     const { data: quiz, error: quizError } = await supabase
       .from('quizzes')
       .select('subject_id, subject:subject_id(name), total_marks, passing_points')
-      .eq('id', quizId)
+      .eq('id', numericQuizId)
       .single();
 
     if (quizError) {
+      console.error('Quiz fetch error:', quizError);
       return res.status(404).json({
         success: false,
         message: 'Quiz not found'
       });
     }
 
+    // Check for existing in-progress attempt (use numericQuizId)
     const { data: existingAttempt, error: checkError } = await supabase
       .from('quiz_attempts')
       .select('id')
       .eq('learner_id', req.user.id)
-      .eq('quiz_id', quizId)
+      .eq('quiz_id', numericQuizId)
       .eq('status', 'in-progress')
       .maybeSingle();
+
+    if (checkError) {
+      console.error('Check attempt error:', checkError);
+      // Non-critical, continue
+    }
 
     if (existingAttempt) {
       return res.json({
@@ -2436,11 +2453,12 @@ app.post('/api/quiz/:quizId/start', authenticateToken, async (req, res) => {
       });
     }
 
+    // Insert new attempt with numeric quiz_id
     const { data: attempt, error } = await supabase
       .from('quiz_attempts')
       .insert({
         learner_id: req.user.id,
-        quiz_id: quizId,
+        quiz_id: numericQuizId,
         subject_id: quiz.subject_id,
         subject: quiz.subject?.name,
         total_marks: quiz.total_marks || 0,
