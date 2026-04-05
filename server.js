@@ -1631,19 +1631,31 @@ app.put('/api/admin/notifications/:id/read', authenticateToken, authenticateAdmi
 app.get('/api/admin/quizzes/:quizId/submissions', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
     const { quizId } = req.params;
-    // Convert to integer because quizzes.id is INTEGER in your DB
-    const numericQuizId = parseInt(quizId, 10);
-    if (isNaN(numericQuizId)) {
-      return res.status(400).json({ success: false, message: 'Invalid quiz ID' });
+    const numericId = parseInt(quizId, 10);
+    if (isNaN(numericId)) {
+      return res.status(400).json({ success: false, message: 'Invalid quiz ID. Must be an integer.' });
     }
 
-    console.log(`📋 Admin fetching submissions for quiz ID: ${numericQuizId}`);
+    // Step 1: Find the UUID of the quiz using its integer int_id
+    const { data: quiz, error: quizError } = await supabase
+      .from('quizzes')
+      .select('id')
+      .eq('int_id', numericId)
+      .maybeSingle();
 
-    // Fetch all completed attempts for this quiz
+    if (quizError || !quiz) {
+      console.error('Quiz not found for int_id:', numericId, quizError);
+      return res.status(404).json({ success: false, message: 'Quiz not found' });
+    }
+
+    const quizUuid = quiz.id;
+    console.log(`📋 Admin fetching submissions for quiz int_id=${numericId} (UUID=${quizUuid})`);
+
+    // Step 2: Fetch all completed attempts for this quiz using the UUID
     const { data: attempts, error } = await supabase
       .from('quiz_attempts')
       .select('*')
-      .eq('quiz_id', numericQuizId)
+      .eq('quiz_id', quizUuid)
       .eq('status', 'completed')
       .order('completed_at', { ascending: false });
 
