@@ -2418,35 +2418,22 @@ app.get('/api/quiz/:quizId/questions', authenticateToken, async (req, res) => {
 // Start a quiz attempt
 app.post('/api/quiz/:quizId/start', authenticateToken, async (req, res) => {
   try {
-    const resolved = resolveQuizRouteId(req.params.quizId);
-    if (!resolved.ok) {
-      return res.status(400).json({ success: false, message: resolved.message });
-    }
-    const quizId = resolved.id; // could be integer (number) or string (UUID)
+    const quizId = req.params.quizId; // assume it's a UUID string
 
-    console.log(`🎯 Starting quiz attempt for learner: ${req.user.id}, Quiz: ${quizId}`);
-
-    // Fetch quiz using the resolved ID (Supabase handles type matching)
+    // 1. Check if the quiz exists
     const { data: quiz, error: quizError } = await supabase
       .from('quizzes')
       .select('subject_id, subject:subject_id(name), total_marks, passing_points')
       .eq('id', quizId)
-      .single();
+      .maybeSingle();  // 👈 returns null if not found
 
-    if (quizError) {
-      console.error('Quiz fetch error:', quizError);
-      return res.status(404).json({
-        success: false,
-        message: 'Quiz not found'
-      });
-    }
-
-    if (!quiz) {
+    if (quizError || !quiz) {
+      console.error('Quiz not found:', quizId);
       return res.status(404).json({ success: false, message: 'Quiz not found' });
     }
 
-    // Check for existing in-progress attempt
-    const { data: existingAttempt, error: checkError } = await supabase
+    // 2. Check for existing attempt
+    const { data: existingAttempt } = await supabase
       .from('quiz_attempts')
       .select('id')
       .eq('learner_id', req.user.id)
@@ -2454,115 +2441,39 @@ app.post('/api/quiz/:quizId/start', authenticateToken, async (req, res) => {
       .eq('status', 'in-progress')
       .maybeSingle();
 
-    if (checkError) {
-      console.error('Check attempt error:', checkError);
-      // non‑critical, continue
-    }
-
     if (existingAttempt) {
-      return res.json({
-        success: true,
-        attempt_id: existingAttempt.id,
-        message: 'Resuming existing attempt'
-      });
+      return res.json({ success: true, attempt_id: existingAttempt.id, message: 'Resuming...' });
     }
 
-    // Insert new attempt
-    const baseRow = {
-      learner_id: req.user.id,
-      quiz_id: quizId,
-      total_marks: quiz.total_marks || 0,
-      status: 'in-progress',
-      started_at: new Date().toISOString()
-    };
-
-    // Optional: add subject_id if it exists and is valid
-    if (quiz.subject_id != null && quiz.subject_id !== '') {
-      baseRow.subject_id = quiz.subject_id;
-    }
-
-    // Optional: add denormalized subject name if the column exists
-    const subjectName = quiz.subject && typeof quiz.subject === 'object' && quiz.subject.name
-      ? String(quiz.subject.name)
-      : null;
-    if (subjectName) {
-      baseRow.subject = subjectName;
-    }
-
+    // 3. Insert new attempt
     const { data: attempt, error: insertError } = await supabase
       .from('quiz_attempts')
-      .insert(baseRow)
+      .insert({
+        learner_id: req.user.id,
+        quiz_id: quizId,
+        total_marks: quiz.total_marks || 0,
+        status: 'in-progress',
+        started_at: new Date().toISOString(),
+        subject_id: quiz.subject_id || null,
+        subject: quiz.subject?.name || null
+      })
       .select()
       .single();
 
     if (insertError) {
-      console.error('Insert attempt error:', insertError);
-
-      // Fallback: try without denormalized subject text
-      if (baseRow.subject) {
-        delete baseRow.subject;
-        const { data: retryAttempt, error: retryError } = await supabase
-          .from('quiz_attempts')
-          .insert(baseRow)
-          .select()
-          .single();
-        if (!retryError && retryAttempt) {
-          return res.json({
-            success: true,
-            attempt_id: retryAttempt.id,
-            message: 'Quiz started successfully',
-            quiz: {
-              total_marks: quiz.total_marks,
-              passing_marks: quiz.passing_points
-            }
-          });
-        }
-      }
-
-      // Last resort: try without subject_id as well
-      if (baseRow.subject_id) {
-        delete baseRow.subject_id;
-        const { data: finalAttempt, error: finalError } = await supabase
-          .from('quiz_attempts')
-          .insert(baseRow)
-          .select()
-          .single();
-        if (!finalError && finalAttempt) {
-          return res.json({
-            success: true,
-            attempt_id: finalAttempt.id,
-            message: 'Quiz started successfully',
-            quiz: {
-              total_marks: quiz.total_marks,
-              passing_marks: quiz.passing_points
-            }
-          });
-        }
-      }
-
-      // All attempts failed
-      return res.status(500).json({
-        success: false,
-        message: 'Failed to start quiz: ' + insertError.message,
-        code: insertError.code
-      });
+      console.error('Insert error:', insertError);
+      return res.status(500).json({ success: false, message: insertError.message });
     }
 
     res.json({
       success: true,
       attempt_id: attempt.id,
       message: 'Quiz started successfully',
-      quiz: {
-        total_marks: quiz.total_marks,
-        passing_marks: quiz.passing_points
-      }
+      quiz: { total_marks: quiz.total_marks, passing_marks: quiz.passing_points }
     });
   } catch (error) {
-    console.error('Error starting quiz:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to start quiz: ' + error.message
-    });
+    console.error('Start error:', error);
+    res.status(500).json({ success: false, message: error.message });
   }
 });
 
