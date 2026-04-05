@@ -2305,44 +2305,64 @@ app.get('/api/quiz/:quizId/questions', authenticateToken, async (req, res) => {
   try {
     const { quizId } = req.params;
     
-    console.log(`📝 Fetching questions for quiz: ${quizId}`);
+    // Convert to integer if your quizzes.id is integer
+    // If your quizzes.id is UUID, keep as string (but then your IDs must be UUIDs)
+    const numericQuizId = parseInt(quizId, 10);
+    if (isNaN(numericQuizId)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid quiz ID format'
+      });
+    }
 
+    console.log(`📝 Fetching questions for quiz ID: ${numericQuizId}`);
+
+    // Fetch quiz details with subject
     const { data: quiz, error: quizError } = await supabase
       .from('quizzes')
       .select(`
         *,
         subject:subject_id(id, name)
       `)
-      .eq('id', quizId)
+      .eq('id', numericQuizId)
       .single();
 
     if (quizError) {
+      console.error('Quiz fetch error:', quizError);
       return res.status(404).json({
         success: false,
         message: 'Quiz not found'
       });
     }
 
+    // Fetch questions
     const { data: questions, error: questionsError } = await supabase
       .from('quiz_questions')
       .select('*')
-      .eq('quiz_id', quizId)
+      .eq('quiz_id', numericQuizId)
       .order('display_order', { ascending: true })
       .order('created_at', { ascending: true });
 
     if (questionsError) {
+      console.error('Questions fetch error:', questionsError);
       return res.status(500).json({
         success: false,
         message: 'Failed to fetch questions'
       });
     }
 
+    // Check for existing attempt (use numericQuizId)
     const { data: existingAttempt, error: attemptError } = await supabase
       .from('quiz_attempts')
-      .select('id, status, score, earned_points, total_points, passed')
+      .select('id, status, score, earned_points, total_points, passed, answers')
       .eq('learner_id', req.user.id)
-      .eq('quiz_id', quizId)
+      .eq('quiz_id', numericQuizId)
       .maybeSingle();
+
+    if (attemptError) {
+      console.error('Attempt fetch error:', attemptError);
+      // Non-critical, continue without saved answers
+    }
 
     if (existingAttempt && existingAttempt.status === 'completed') {
       return res.json({
