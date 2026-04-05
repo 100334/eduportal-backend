@@ -163,18 +163,21 @@ const authenticateAdmin = async (req, res, next) => {
  */
 function resolveQuizRouteId(quizIdParam) {
   const raw = String(quizIdParam ?? '').trim();
-  if (!raw) {
-    return { ok: false, message: 'Missing quiz ID' };
-  }
-  // Only accept positive integers
+  if (!raw) return { ok: false, message: 'Missing quiz ID' };
+  
+  // Numeric ID
   if (/^\d+$/.test(raw)) {
     const id = parseInt(raw, 10);
-    if (isNaN(id) || id <= 0) {
-      return { ok: false, message: 'Quiz ID must be a positive integer' };
-    }
-    return { ok: true, id: id };
+    if (isNaN(id) || id <= 0) return { ok: false, message: 'Invalid numeric ID' };
+    return { ok: true, id: id, type: 'int' };
   }
-  return { ok: false, message: 'Invalid quiz ID format. Expected a numeric ID.' };
+  
+  // UUID format
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(raw)) {
+    return { ok: true, id: raw, type: 'uuid' };
+  }
+  
+  return { ok: false, message: 'Quiz ID must be a number or UUID' };
 }
 
 // Log admin action helper
