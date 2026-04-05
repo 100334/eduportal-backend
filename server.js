@@ -2610,149 +2610,97 @@ app.post('/api/quiz/:quizId/submit', authenticateToken, async (req, res) => {
       return res.status(404).json({ success: false, message: 'No active attempt found' });
     }
 
-    // Fetch quiz questions
+    // Fetch quiz questions (needed only to store the answers structure, no grading)
     const { data: questions, error: qError } = await supabase
       .from('quiz_questions')
-      .select('*')
+      .select('id, question_text, question_image, option_images, answer_image, question_type, marks, options, correct_answer, expected_answer, explanation')
       .eq('quiz_id', quizId);
 
     if (qError) throw qError;
 
-    // Fetch quiz details and learner name
-    const { data: quiz, error: quizError } = await supabase
-      .from('quizzes')
-      .select('title, total_marks, passing_points')
-      .eq('id', quizId)
-      .single();
-
-    if (quizError) throw quizError;
-
-    const { data: learner, error: learnerError } = await supabase
-      .from('learners')
-      .select('name')
-      .eq('id', learnerId)
-      .single();
-
-    if (learnerError) throw learnerError;
-
-    // Calculate score
-    let earnedPoints = 0;
-    let totalPossiblePoints = 0;
-    let correctCount = 0;
-    const gradedAnswers = [];
-
-    questions.forEach((question, idx) => {
+    // Build answers array without calculating points
+    const submittedAnswers = questions.map((question, idx) => {
       const userAnswer = answers && answers[idx] !== undefined ? answers[idx] : null;
-      let isCorrect = false;
-      let pointsObtained = 0;
       let userAnswerText = '';
-
-      totalPossiblePoints += (question.marks || 1);
 
       if (question.question_type === 'multiple_choice') {
         const selectedOption = parseInt(userAnswer);
         userAnswerText = question.options[selectedOption] || 'Not answered';
-        isCorrect = (selectedOption === question.correct_answer);
-        pointsObtained = isCorrect ? (question.marks || 1) : 0;
-      } else if (question.question_type === 'short_answer') {
-        userAnswerText = userAnswer ? String(userAnswer).trim().toLowerCase() : '';
-        const expected = question.expected_answer ? question.expected_answer.trim().toLowerCase() : '';
-        isCorrect = (userAnswerText === expected) || (expected && userAnswerText.includes(expected));
-        pointsObtained = isCorrect ? (question.marks || 1) : 0;
+      } else {
+        userAnswerText = userAnswer ? String(userAnswer).trim() : 'Not answered';
       }
 
-      if (isCorrect) correctCount++;
-      earnedPoints += pointsObtained;
-
-      gradedAnswers.push({
+      return {
         question_id: question.id,
         question_text: question.question_text,
-        question_image: question.question_image || null,       // <-- ADD
-        option_images: question.option_images || [],           // <-- ADD (for multiple choice)
-        answer_image: question.answer_image || null,  
+        question_image: question.question_image || null,
+        option_images: question.option_images || [],
+        answer_image: question.answer_image || null,
         question_type: question.question_type,
         selected_answer: userAnswer,
-        selected_answer_text: userAnswerText || 'Not answered',
-        is_correct: isCorrect,
-        points_obtained: pointsObtained,
+        selected_answer_text: userAnswerText,
+        // grading fields – initially null
+        is_correct: null,
+        points_obtained: null,
         max_points: question.marks || 1,
         correct_answer: question.question_type === 'multiple_choice'
           ? question.options[question.correct_answer]
           : question.expected_answer,
         explanation: question.explanation,
         feedback: null
-      });
+      };
     });
 
-    const percentage = totalPossiblePoints > 0 ? (earnedPoints / totalPossiblePoints) * 100 : 0;
-    const passed = earnedPoints >= (quiz.passing_points || Math.round(totalPossiblePoints * 0.5));
-
-    // Update attempt with results
-    const { data: updatedAttempt, error: updateError } = await supabase
+    // Update attempt – mark as submitted, no automatic grading
+    const { error: updateError } = await supabase
       .from('quiz_attempts')
       .update({
-        status: 'completed',
-        answers: gradedAnswers,
-        earned_points: earnedPoints,
-        total_points: totalPossiblePoints,
-        score: correctCount,
-        percentage: percentage,
-        passed: passed,
-        completed_at: new Date().toISOString(),
+        status: 'submitted',       // new status: pending admin review
+        answers: submittedAnswers,
         time_taken: time_taken || null,
-        feedback: null
+        completed_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
       })
-      .eq('id', attempt_id)
-      .select()
-      .single();
+      .eq('id', attempt_id);
 
     if (updateError) throw updateError;
 
-    // -------- NOTIFICATION FOR ADMIN --------
-    // 1. Log to audit_logs (already used for admin actions)
-    await supabase.from('audit_logs').insert({
-      user_id: learnerId,
-      action: 'QUIZ_COMPLETED',
-      details: `Learner ${learner.name} completed quiz "${quiz.title}" with score ${earnedPoints}/${totalPossiblePoints} (${Math.round(percentage)}%)`,
-      ip_address: req.ip,
-      created_at: new Date().toISOString()
-    });
-
-    // 2. Create a notification for all admin users (or a specific admin)
-    const { data: admins, error: adminsError } = await supabase
-      .from('users')
-      .select('id')
-      .eq('role', 'admin')
-      .eq('is_active', true);
-
-    if (!adminsError && admins && admins.length) {
-      const notificationInserts = admins.map(admin => ({
-        user_id: admin.id,
-        type: 'quiz_completed',
-        title: 'Quiz Completed',
-        message: `${learner.name} completed "${quiz.title}" with ${earnedPoints}/${totalPossiblePoints} marks.`,
-        related_id: quizId,
-        is_read: false,
-        created_at: new Date().toISOString()
-      }));
-      await supabase.from('notifications').insert(notificationInserts);
+    // Notify admins that a quiz needs grading (optional)
+    const { data: learner, error: learnerError } = await supabase
+      .from('learners')
+      .select('name')
+      .eq('id', learnerId)
+      .single();
+    if (!learnerError && learner) {
+      const { data: quizTitle } = await supabase
+        .from('quizzes')
+        .select('title')
+        .eq('id', quizId)
+        .single();
+      if (quizTitle) {
+        const { data: admins } = await supabase
+          .from('users')
+          .select('id')
+          .eq('role', 'admin')
+          .eq('is_active', true);
+        if (admins && admins.length) {
+          const notifications = admins.map(admin => ({
+            user_id: admin.id,
+            type: 'quiz_pending',
+            title: 'Quiz Submitted for Grading',
+            message: `${learner.name} submitted "${quizTitle.title}" for grading.`,
+            related_id: attempt_id,
+            is_read: false,
+            created_at: new Date().toISOString()
+          }));
+          await supabase.from('notifications').insert(notifications);
+        }
+      }
     }
 
-    // Return result
     res.json({
       success: true,
-      marks_earned: earnedPoints,
-      total_marks: totalPossiblePoints,
-      correct_answers: correctCount,
-      total_questions: questions.length,
-      percentage: Math.round(percentage),
-      passed: passed,
-      passing_score: quiz.passing_points || Math.round(totalPossiblePoints * 0.5),
-      answers: gradedAnswers,
-      feedback: null,
-      message: passed
-        ? `🎉 Congratulations! You passed with ${earnedPoints}/${totalPossiblePoints} marks!`
-        : `📚 Keep practicing! You got ${earnedPoints}/${totalPossiblePoints} marks.`
+      message: 'Your answers have been submitted successfully. The admin will review and grade your submission shortly.'
     });
   } catch (error) {
     console.error('Submit quiz error:', error);
