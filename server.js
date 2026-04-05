@@ -2442,6 +2442,10 @@ app.post('/api/quiz/:quizId/start', authenticateToken, async (req, res) => {
       });
     }
 
+    if (!quiz) {
+      return res.status(404).json({ success: false, message: 'Quiz not found' });
+    }
+
     // Check for existing in-progress attempt (use numericQuizId)
     const { data: existingAttempt, error: checkError } = await supabase
       .from('quiz_attempts')
@@ -2464,26 +2468,74 @@ app.post('/api/quiz/:quizId/start', authenticateToken, async (req, res) => {
       });
     }
 
-    // Insert new attempt with numeric quiz_id
-    const { data: attempt, error } = await supabase
-      .from('quiz_attempts')
-      .insert({
-        learner_id: req.user.id,
-        quiz_id: numericQuizId,
-        subject_id: quiz.subject_id,
-        subject: quiz.subject?.name,
-        total_marks: quiz.total_marks || 0,
-        status: 'in-progress',
-        started_at: new Date().toISOString()
-      })
-      .select()
-      .single();
+    // Insert new attempt — omit undefined keys; retry if FK/column issues
+    const baseRow = {
+      learner_id: req.user.id,
+      quiz_id: numericQuizId,
+      total_marks: quiz.total_marks || 0,
+      status: 'in-progress',
+      started_at: new Date().toISOString()
+    };
+    if (quiz.subject_id != null && quiz.subject_id !== '') {
+      baseRow.subject_id = quiz.subject_id;
+    }
+    const subjectName =
+      quiz.subject && typeof quiz.subject === 'object' && quiz.subject.name
+        ? String(quiz.subject.name)
+        : null;
+    if (subjectName) {
+      baseRow.subject = subjectName;
+    }
+
+    let attempt;
+    let error;
+    const tryInsert = async (row) =>
+      supabase.from('quiz_attempts').insert(row).select().single();
+
+    ({ data: attempt, error } = await tryInsert(baseRow));
+    if (error) {
+      console.error('Insert attempt (full):', error.code, error.message, error.details);
+    }
+
+    // Retry without denormalized subject text (column may be missing or different type)
+    if (error && baseRow.subject !== undefined) {
+      const row2 = { ...baseRow };
+      delete row2.subject;
+      ({ data: attempt, error } = await tryInsert(row2));
+      if (error) console.error('Insert attempt (no subject text):', error.code, error.message);
+    }
+
+    // Retry without subject_id if FK points to missing subject row
+    if (error && baseRow.subject_id !== undefined) {
+      const row3 = { ...baseRow };
+      delete row3.subject;
+      delete row3.subject_id;
+      ({ data: attempt, error } = await tryInsert(row3));
+      if (error) console.error('Insert attempt (minimal):', error.code, error.message);
+    }
 
     if (error) {
-      console.error('Insert error:', error);
+      console.error('Insert error (final):', error);
+      const msg = error.message || '';
+      const idLooksUuid =
+        typeof numericQuizId === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(numericQuizId);
+      const typeMismatch =
+        idLooksUuid &&
+        (/invalid input syntax for type/i.test(msg) ||
+          /integer|bigint|numeric/i.test(msg));
+      if (typeMismatch) {
+        return res.status(500).json({
+          success: false,
+          message:
+            'Database mismatch: quizzes.id is UUID but quiz_attempts.quiz_id may still be integer. ' +
+            'In Supabase → SQL Editor, alter quiz_attempts.quiz_id to uuid and re-add the foreign key to quizzes(id), or recreate the column to match.',
+          code: error.code
+        });
+      }
       return res.status(500).json({
         success: false,
-        message: 'Failed to start quiz: ' + error.message
+        message: 'Failed to start quiz: ' + msg,
+        code: error.code
       });
     }
 
