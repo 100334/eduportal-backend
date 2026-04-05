@@ -12,8 +12,6 @@ const fs = require('fs').promises;
 const crypto = require('crypto');
 const uploadRoutes = require('./routes/upload');
 
-
-
 // Load environment variables
 dotenv.config();
 
@@ -109,7 +107,7 @@ const authLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false
 });
-app.use('/api', uploadRoutes);   // Now /api/upload is active
+app.use('/api', uploadRoutes);
 app.use('/api', apiLimiter);
 app.use('/api/auth', authLimiter);
 
@@ -279,12 +277,10 @@ app.get('/api/health', async (req, res) => {
 app.post('/api/auth/teacher/login', async (req, res) => {
   try {
     const { username, password } = req.body;
-    
     console.log('🔍 TEACHER LOGIN ATTEMPT');
     console.log('Username:', username);
     
     const normalizedUsername = username?.trim().toLowerCase();
-    
     const { data: teacher, error } = await supabase
       .from('users')
       .select('*')
@@ -294,39 +290,19 @@ app.post('/api/auth/teacher/login', async (req, res) => {
     
     if (error) {
       console.error('Supabase query error:', error);
-      return res.status(401).json({ 
-        success: false, 
-        message: 'Error finding teacher' 
-      });
+      return res.status(401).json({ success: false, message: 'Error finding teacher' });
     }
-    
     if (!teacher) {
       console.log('❌ No teacher found with email:', normalizedUsername);
-      return res.status(401).json({ 
-        success: false, 
-        message: 'Invalid credentials' 
-      });
+      return res.status(401).json({ success: false, message: 'Invalid credentials' });
     }
-    
     console.log('✅ Teacher found:', teacher.email);
-    
-    const isValidPassword = password === 'password123' || 
-                           (teacher.password_hash && password === teacher.password_hash);
-    
+    const isValidPassword = password === 'password123' || (teacher.password_hash && password === teacher.password_hash);
     if (!isValidPassword) {
       console.log('❌ Invalid password for:', normalizedUsername);
-      return res.status(401).json({ 
-        success: false, 
-        message: 'Invalid credentials' 
-      });
+      return res.status(401).json({ success: false, message: 'Invalid credentials' });
     }
-    
-    const token = Buffer.from(JSON.stringify({ 
-      id: teacher.id, 
-      email: teacher.email, 
-      role: teacher.role 
-    })).toString('base64');
-    
+    const token = Buffer.from(JSON.stringify({ id: teacher.id, email: teacher.email, role: teacher.role })).toString('base64');
     res.json({
       success: true,
       token,
@@ -337,13 +313,9 @@ app.post('/api/auth/teacher/login', async (req, res) => {
         role: teacher.role
       }
     });
-    
   } catch (error) {
     console.error('❌ Teacher login error:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Server error: ' + error.message 
-    });
+    res.status(500).json({ success: false, message: 'Server error: ' + error.message });
   }
 });
 
@@ -351,13 +323,11 @@ app.post('/api/auth/teacher/login', async (req, res) => {
 app.post('/api/auth/learner/login', async (req, res) => {
   try {
     const { name, regNumber } = req.body;
-    
     console.log('🔍 LEARNER LOGIN ATTEMPT');
     console.log('Request body:', { name, regNumber });
     
     const normalizedName = name?.trim().toLowerCase();
     const normalizedReg = regNumber?.trim().toUpperCase();
-    
     let learner = null;
     
     const { data: flexibleMatch, error: flexibleError } = await supabase
@@ -367,11 +337,7 @@ app.post('/api/auth/learner/login', async (req, res) => {
       .ilike('reg_number', `%${normalizedReg}%`)
       .eq('status', 'Active')
       .maybeSingle();
-    
-    if (!flexibleError && flexibleMatch) {
-      learner = flexibleMatch;
-      console.log('✅ Found learner:', learner.name);
-    }
+    if (!flexibleError && flexibleMatch) learner = flexibleMatch;
     
     if (!learner) {
       const { data: exactMatch, error: exactError } = await supabase
@@ -380,27 +346,15 @@ app.post('/api/auth/learner/login', async (req, res) => {
         .eq('name', name?.trim())
         .eq('reg_number', regNumber?.trim())
         .maybeSingle();
-      
-      if (!exactError && exactMatch) {
-        learner = exactMatch;
-        console.log('✅ Found learner with exact match:', learner.name);
-      }
+      if (!exactError && exactMatch) learner = exactMatch;
     }
     
     if (!learner) {
       console.log('❌ No matching learner found');
-      return res.status(401).json({ 
-        success: false, 
-        message: 'Invalid name or registration number.' 
-      });
+      return res.status(401).json({ success: false, message: 'Invalid name or registration number.' });
     }
     
-    const token = Buffer.from(JSON.stringify({ 
-      id: learner.id, 
-      name: learner.name, 
-      role: 'learner' 
-    })).toString('base64');
-    
+    const token = Buffer.from(JSON.stringify({ id: learner.id, name: learner.name, role: 'learner' })).toString('base64');
     res.json({
       success: true,
       token,
@@ -412,13 +366,9 @@ app.post('/api/auth/learner/login', async (req, res) => {
         role: 'learner'
       }
     });
-    
   } catch (error) {
     console.error('❌ Learner login error:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Server error: ' + error.message 
-    });
+    res.status(500).json({ success: false, message: 'Server error: ' + error.message });
   }
 });
 
@@ -426,71 +376,37 @@ app.post('/api/auth/learner/login', async (req, res) => {
 app.post('/api/auth/admin/login', async (req, res) => {
   try {
     const { email, password } = req.body;
-    
     console.log('🔍 Admin login attempt for:', email);
-    
     const { data: user, error } = await supabase
       .from('users')
       .select('id, email, name, password_hash, role, is_active')
       .eq('email', email?.trim().toLowerCase())
       .maybeSingle();
-    
     if (error) {
       console.error('❌ Database error:', error);
-      return res.status(500).json({ 
-        success: false, 
-        message: 'Database error' 
-      });
+      return res.status(500).json({ success: false, message: 'Database error' });
     }
-    
     if (!user) {
       console.log('❌ User not found:', email);
-      return res.status(401).json({ 
-        success: false, 
-        message: 'Invalid credentials' 
-      });
+      return res.status(401).json({ success: false, message: 'Invalid credentials' });
     }
-    
     console.log('✅ User found:', user.email, 'Role:', user.role);
-    
     if (user.role !== 'admin') {
       console.log('❌ User is not admin. Role:', user.role);
-      return res.status(403).json({ 
-        success: false, 
-        message: 'Access denied. Admin privileges required.' 
-      });
+      return res.status(403).json({ success: false, message: 'Access denied. Admin privileges required.' });
     }
-    
     if (user.is_active === false) {
       console.log('❌ Account is deactivated');
-      return res.status(403).json({ 
-        success: false, 
-        message: 'Account is deactivated. Please contact support.' 
-      });
+      return res.status(403).json({ success: false, message: 'Account is deactivated. Please contact support.' });
     }
-    
     let isValidPassword = false;
-    
-    if (password === 'admin123' || password === user.password_hash) {
-      isValidPassword = true;
-    }
-    
+    if (password === 'admin123' || password === user.password_hash) isValidPassword = true;
     if (!isValidPassword) {
       console.log('❌ Invalid password');
-      return res.status(401).json({ 
-        success: false, 
-        message: 'Invalid credentials' 
-      });
+      return res.status(401).json({ success: false, message: 'Invalid credentials' });
     }
-    
-    const token = Buffer.from(JSON.stringify({ 
-      id: user.id, 
-      email: user.email, 
-      role: user.role 
-    })).toString('base64');
-    
+    const token = Buffer.from(JSON.stringify({ id: user.id, email: user.email, role: user.role })).toString('base64');
     console.log('✅ Admin login successful:', user.email);
-    
     res.json({
       success: true,
       token,
@@ -503,21 +419,14 @@ app.post('/api/auth/admin/login', async (req, res) => {
     });
   } catch (error) {
     console.error('❌ Admin login error:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Server error during login' 
-    });
+    res.status(500).json({ success: false, message: 'Server error during login' });
   }
 });
 
 // Token verification
 app.get('/api/auth/verify', async (req, res) => {
   const token = req.headers.authorization?.split(' ')[1];
-  
-  if (!token) {
-    return res.status(401).json({ valid: false, message: 'No token provided' });
-  }
-  
+  if (!token) return res.status(401).json({ valid: false, message: 'No token provided' });
   try {
     const decoded = JSON.parse(Buffer.from(token, 'base64').toString());
     res.json({ valid: true, user: decoded });
@@ -534,26 +443,21 @@ app.get('/api/auth/verify', async (req, res) => {
 app.get('/api/admin/stats', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
     console.log('Fetching admin stats for user:', req.user.id);
-    
     const { count: learnersCount, error: learnersError } = await supabase
       .from('learners')
       .select('*', { count: 'exact', head: true });
-    
     const { count: teachersCount, error: teachersError } = await supabase
       .from('users')
       .select('*', { count: 'exact', head: true })
       .eq('role', 'teacher');
-    
     const { count: classesCount, error: classesError } = await supabase
       .from('classes')
       .select('*', { count: 'exact', head: true });
-    
     const { data: recentLogs, error: logsError } = await supabase
       .from('audit_logs')
       .select('action, details, created_at')
       .order('created_at', { ascending: false })
       .limit(5);
-    
     res.json({
       success: true,
       learners: learnersCount || 0,
@@ -561,14 +465,9 @@ app.get('/api/admin/stats', authenticateToken, authenticateAdmin, async (req, re
       classes: classesCount || 0,
       recent_activities: recentLogs || []
     });
-    
   } catch (err) {
     console.error('Error fetching admin stats:', err);
-    res.status(500).json({
-      success: false,
-      message: 'Database error',
-      error: err.message
-    });
+    res.status(500).json({ success: false, message: 'Database error', error: err.message });
   }
 });
 
@@ -580,9 +479,7 @@ app.get('/api/admin/teachers', authenticateToken, authenticateAdmin, async (req,
       .select('id, email, name, department, specialization, phone, address, employee_id, is_active, created_at, class_id')
       .eq('role', 'teacher')
       .order('name', { ascending: true });
-    
     if (error) throw error;
-    
     const formattedTeachers = (teachers || []).map(teacher => ({
       id: teacher.id,
       full_name: teacher.name,
@@ -596,60 +493,30 @@ app.get('/api/admin/teachers', authenticateToken, authenticateAdmin, async (req,
       class_id: teacher.class_id,
       joined_at: teacher.created_at
     }));
-    
-    res.json({
-      success: true,
-      teachers: formattedTeachers
-    });
+    res.json({ success: true, teachers: formattedTeachers });
   } catch (err) {
     console.error('Error fetching teachers:', err);
-    res.json({
-      success: true,
-      teachers: [],
-      message: 'No teachers found'
-    });
+    res.json({ success: true, teachers: [], message: 'No teachers found' });
   }
 });
 
 // Register a new teacher
 app.post('/api/admin/teachers', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
-    const { 
-      username, 
-      email, 
-      password, 
-      department, 
-      specialization, 
-      phone, 
-      address 
-    } = req.body;
-    
+    const { username, email, password, department, specialization, phone, address } = req.body;
     console.log('📝 Admin registering teacher:', { username, email, department });
-    
     if (!username || !email || !password) {
-      return res.status(400).json({
-        success: false,
-        message: 'Username, email, and password are required'
-      });
+      return res.status(400).json({ success: false, message: 'Username, email, and password are required' });
     }
-    
     const { data: existing, error: checkError } = await supabase
       .from('users')
       .select('id')
       .eq('email', email.toLowerCase())
       .maybeSingle();
-    
-    if (existing) {
-      return res.status(409).json({
-        success: false,
-        message: 'Email already exists'
-      });
-    }
-    
+    if (existing) return res.status(409).json({ success: false, message: 'Email already exists' });
     const year = new Date().getFullYear();
     const randomNum = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
     const employeeId = `TCH-${year}-${randomNum}`;
-    
     const { data: newUser, error } = await supabase
       .from('users')
       .insert({
@@ -667,22 +534,11 @@ app.post('/api/admin/teachers', authenticateToken, authenticateAdmin, async (req
       })
       .select()
       .single();
-    
     if (error) {
       console.error('Insert error:', error);
-      return res.status(500).json({
-        success: false,
-        message: 'Database error: ' + error.message
-      });
+      return res.status(500).json({ success: false, message: 'Database error: ' + error.message });
     }
-    
-    await logAdminAction(
-      req.user.id,
-      'REGISTER_TEACHER',
-      `Registered teacher: ${username} (${email}) with employee ID: ${employeeId}`,
-      req.ip
-    );
-    
+    await logAdminAction(req.user.id, 'REGISTER_TEACHER', `Registered teacher: ${username} (${email}) with employee ID: ${employeeId}`, req.ip);
     res.json({
       success: true,
       message: 'Teacher registered successfully',
@@ -698,13 +554,9 @@ app.post('/api/admin/teachers', authenticateToken, authenticateAdmin, async (req
         role: newUser.role
       }
     });
-    
   } catch (err) {
     console.error('Error registering teacher:', err);
-    res.status(500).json({
-      success: false,
-      message: 'Database error: ' + err.message
-    });
+    res.status(500).json({ success: false, message: 'Database error: ' + err.message });
   }
 });
 
@@ -713,7 +565,6 @@ app.put('/api/admin/teachers/:teacherId', authenticateToken, authenticateAdmin, 
   try {
     const { teacherId } = req.params;
     const { name, email, department, specialization, phone, address, is_active, class_id } = req.body;
-    
     const updateData = {};
     if (name) updateData.name = name;
     if (email) updateData.email = email;
@@ -724,9 +575,7 @@ app.put('/api/admin/teachers/:teacherId', authenticateToken, authenticateAdmin, 
     if (is_active !== undefined) updateData.is_active = is_active;
     if (class_id !== undefined) updateData.class_id = class_id;
     updateData.updated_at = new Date().toISOString();
-    
     console.log('Updating teacher with data:', updateData);
-    
     const { data: updatedTeacher, error } = await supabase
       .from('users')
       .update(updateData)
@@ -734,37 +583,15 @@ app.put('/api/admin/teachers/:teacherId', authenticateToken, authenticateAdmin, 
       .eq('role', 'teacher')
       .select()
       .single();
-    
     if (error) {
-      if (error.code === 'PGRST116') {
-        return res.status(404).json({
-          success: false,
-          message: 'Teacher not found'
-        });
-      }
+      if (error.code === 'PGRST116') return res.status(404).json({ success: false, message: 'Teacher not found' });
       throw error;
     }
-    
-    await logAdminAction(
-      req.user.id,
-      'UPDATE_TEACHER',
-      `Updated teacher ID ${teacherId}${class_id ? `, assigned to class: ${class_id}` : ''}`,
-      req.ip
-    );
-    
-    res.json({
-      success: true,
-      message: 'Teacher updated successfully',
-      teacher: updatedTeacher
-    });
-    
+    await logAdminAction(req.user.id, 'UPDATE_TEACHER', `Updated teacher ID ${teacherId}${class_id ? `, assigned to class: ${class_id}` : ''}`, req.ip);
+    res.json({ success: true, message: 'Teacher updated successfully', teacher: updatedTeacher });
   } catch (err) {
     console.error('Error updating teacher:', err);
-    res.status(500).json({
-      success: false,
-      message: 'Database error',
-      error: err.message
-    });
+    res.status(500).json({ success: false, message: 'Database error', error: err.message });
   }
 });
 
@@ -772,48 +599,24 @@ app.put('/api/admin/teachers/:teacherId', authenticateToken, authenticateAdmin, 
 app.delete('/api/admin/teachers/:teacherId', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
     const { teacherId } = req.params;
-    
     const { data: teacher, error: getError } = await supabase
       .from('users')
       .select('name')
       .eq('id', teacherId)
       .eq('role', 'teacher')
       .single();
-    
-    if (getError) {
-      return res.status(404).json({
-        success: false,
-        message: 'Teacher not found'
-      });
-    }
-    
+    if (getError) return res.status(404).json({ success: false, message: 'Teacher not found' });
     const { error } = await supabase
       .from('users')
       .delete()
       .eq('id', teacherId)
       .eq('role', 'teacher');
-    
     if (error) throw error;
-    
-    await logAdminAction(
-      req.user.id,
-      'DELETE_TEACHER',
-      `Deleted teacher ID ${teacherId}: ${teacher?.name}`,
-      req.ip
-    );
-    
-    res.json({
-      success: true,
-      message: 'Teacher deleted successfully'
-    });
-    
+    await logAdminAction(req.user.id, 'DELETE_TEACHER', `Deleted teacher ID ${teacherId}: ${teacher?.name}`, req.ip);
+    res.json({ success: true, message: 'Teacher deleted successfully' });
   } catch (err) {
     console.error('Error deleting teacher:', err);
-    res.status(500).json({
-      success: false,
-      message: 'Database error',
-      error: err.message
-    });
+    res.status(500).json({ success: false, message: 'Database error', error: err.message });
   }
 });
 
@@ -828,15 +631,12 @@ app.get('/api/admin/classes', authenticateToken, authenticateAdmin, async (req, 
       `)
       .order('year', { ascending: false })
       .order('name', { ascending: true });
-    
     if (error) throw error;
-    
     const classesWithCounts = await Promise.all((classes || []).map(async (cls) => {
       const { count, error: countError } = await supabase
         .from('learners')
         .select('*', { count: 'exact', head: true })
         .eq('class_id', cls.id);
-      
       return {
         ...cls,
         id: cls.id.toString(),
@@ -845,18 +645,10 @@ app.get('/api/admin/classes', authenticateToken, authenticateAdmin, async (req, 
         learner_count: count || 0
       };
     }));
-    
-    res.json({
-      success: true,
-      classes: classesWithCounts
-    });
+    res.json({ success: true, classes: classesWithCounts });
   } catch (err) {
     console.error('Error fetching classes:', err);
-    res.status(500).json({
-      success: false,
-      message: 'Database error',
-      error: err.message
-    });
+    res.status(500).json({ success: false, message: 'Database error', error: err.message });
   }
 });
 
@@ -864,28 +656,14 @@ app.get('/api/admin/classes', authenticateToken, authenticateAdmin, async (req, 
 app.post('/api/admin/classes', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
     const { name, year, teacher_id } = req.body;
-    
-    if (!name || !year) {
-      return res.status(400).json({
-        success: false,
-        message: 'Class name and year are required'
-      });
-    }
-    
+    if (!name || !year) return res.status(400).json({ success: false, message: 'Class name and year are required' });
     const { data: existing, error: checkError } = await supabase
       .from('classes')
       .select('id')
       .eq('name', name)
       .eq('year', year)
       .maybeSingle();
-    
-    if (existing) {
-      return res.status(409).json({
-        success: false,
-        message: 'Class name already exists for this year'
-      });
-    }
-    
+    if (existing) return res.status(409).json({ success: false, message: 'Class name already exists for this year' });
     const { data: newClass, error } = await supabase
       .from('classes')
       .insert({
@@ -897,29 +675,12 @@ app.post('/api/admin/classes', authenticateToken, authenticateAdmin, async (req,
       })
       .select()
       .single();
-    
     if (error) throw error;
-    
-    await logAdminAction(
-      req.user.id,
-      'CREATE_CLASS',
-      `Created class: ${name} (${year})`,
-      req.ip
-    );
-    
-    res.json({
-      success: true,
-      message: 'Class created successfully',
-      class: { ...newClass, id: newClass.id.toString() }
-    });
-    
+    await logAdminAction(req.user.id, 'CREATE_CLASS', `Created class: ${name} (${year})`, req.ip);
+    res.json({ success: true, message: 'Class created successfully', class: { ...newClass, id: newClass.id.toString() } });
   } catch (err) {
     console.error('Error creating class:', err);
-    res.status(500).json({
-      success: false,
-      message: 'Database error',
-      error: err.message
-    });
+    res.status(500).json({ success: false, message: 'Database error', error: err.message });
   }
 });
 
@@ -928,7 +689,6 @@ app.put('/api/admin/classes/:classId', authenticateToken, authenticateAdmin, asy
   try {
     const { classId } = req.params;
     const { name, year, teacher_id } = req.body;
-    
     const { data: updatedClass, error } = await supabase
       .from('classes')
       .update({
@@ -940,37 +700,15 @@ app.put('/api/admin/classes/:classId', authenticateToken, authenticateAdmin, asy
       .eq('id', classId)
       .select()
       .single();
-    
     if (error) {
-      if (error.code === 'PGRST116') {
-        return res.status(404).json({
-          success: false,
-          message: 'Class not found'
-        });
-      }
+      if (error.code === 'PGRST116') return res.status(404).json({ success: false, message: 'Class not found' });
       throw error;
     }
-    
-    await logAdminAction(
-      req.user.id,
-      'UPDATE_CLASS',
-      `Updated class ID ${classId}`,
-      req.ip
-    );
-    
-    res.json({
-      success: true,
-      message: 'Class updated successfully',
-      class: updatedClass
-    });
-    
+    await logAdminAction(req.user.id, 'UPDATE_CLASS', `Updated class ID ${classId}`, req.ip);
+    res.json({ success: true, message: 'Class updated successfully', class: updatedClass });
   } catch (err) {
     console.error('Error updating class:', err);
-    res.status(500).json({
-      success: false,
-      message: 'Database error',
-      error: err.message
-    });
+    res.status(500).json({ success: false, message: 'Database error', error: err.message });
   }
 });
 
@@ -978,55 +716,26 @@ app.put('/api/admin/classes/:classId', authenticateToken, authenticateAdmin, asy
 app.delete('/api/admin/classes/:classId', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
     const { classId } = req.params;
-    
     const { count: learnersCount, error: checkError } = await supabase
       .from('learners')
       .select('*', { count: 'exact', head: true })
       .eq('class_id', classId);
-    
-    if (learnersCount > 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Cannot delete class with enrolled learners'
-      });
-    }
-    
+    if (learnersCount > 0) return res.status(400).json({ success: false, message: 'Cannot delete class with enrolled learners' });
     const { data: deletedClass, error } = await supabase
       .from('classes')
       .delete()
       .eq('id', classId)
       .select()
       .single();
-    
     if (error) {
-      if (error.code === 'PGRST116') {
-        return res.status(404).json({
-          success: false,
-          message: 'Class not found'
-        });
-      }
+      if (error.code === 'PGRST116') return res.status(404).json({ success: false, message: 'Class not found' });
       throw error;
     }
-    
-    await logAdminAction(
-      req.user.id,
-      'DELETE_CLASS',
-      `Deleted class ID ${classId}: ${deletedClass.name}`,
-      req.ip
-    );
-    
-    res.json({
-      success: true,
-      message: 'Class deleted successfully'
-    });
-    
+    await logAdminAction(req.user.id, 'DELETE_CLASS', `Deleted class ID ${classId}: ${deletedClass.name}`, req.ip);
+    res.json({ success: true, message: 'Class deleted successfully' });
   } catch (err) {
     console.error('Error deleting class:', err);
-    res.status(500).json({
-      success: false,
-      message: 'Database error',
-      error: err.message
-    });
+    res.status(500).json({ success: false, message: 'Database error', error: err.message });
   }
 });
 
@@ -1037,20 +746,11 @@ app.get('/api/admin/learners', authenticateToken, authenticateAdmin, async (req,
       .from('learners')
       .select('*')
       .order('name', { ascending: true });
-    
     if (error) throw error;
-    
-    res.json({
-      success: true,
-      learners: learners || []
-    });
+    res.json({ success: true, learners: learners || [] });
   } catch (err) {
     console.error('Error fetching learners:', err);
-    res.status(500).json({
-      success: false,
-      message: 'Database error',
-      error: err.message
-    });
+    res.status(500).json({ success: false, message: 'Database error', error: err.message });
   }
 });
 
@@ -1058,60 +758,30 @@ app.get('/api/admin/learners', authenticateToken, authenticateAdmin, async (req,
 app.post('/api/admin/learners', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
     const { name, reg_number, class_id, form, enrollment_date } = req.body;
-    
     console.log('📝 Admin registering learner:', { name, reg_number, class_id, form });
-    
-    if (!name || !reg_number) {
-      return res.status(400).json({
-        success: false,
-        message: 'Name and registration number are required'
-      });
-    }
-    
+    if (!name || !reg_number) return res.status(400).json({ success: false, message: 'Name and registration number are required' });
     const { data: existing, error: checkError } = await supabase
       .from('learners')
       .select('id')
       .eq('reg_number', reg_number)
       .maybeSingle();
-    
-    if (existing) {
-      return res.status(409).json({
-        success: false,
-        message: 'Registration number already exists'
-      });
-    }
-    
+    if (existing) return res.status(409).json({ success: false, message: 'Registration number already exists' });
     let assignedForm = form;
     let assignedClassId = null;
-    
     if (class_id) {
       const { data: classExists, error: classError } = await supabase
         .from('classes')
         .select('id, name')
         .eq('id', class_id)
         .maybeSingle();
-      
-      if (classError || !classExists) {
-        return res.status(404).json({
-          success: false,
-          message: 'Selected class not found'
-        });
-      }
-      
+      if (classError || !classExists) return res.status(404).json({ success: false, message: 'Selected class not found' });
       assignedClassId = classExists.id;
-      
       if (!assignedForm) {
         const formMatch = classExists.name.match(/Form\s*(\d+)/i);
-        if (formMatch) {
-          assignedForm = `Form ${formMatch[1]}`;
-        }
+        if (formMatch) assignedForm = `Form ${formMatch[1]}`;
       }
     }
-    
-    if (!assignedForm) {
-      assignedForm = 'Form 1';
-    }
-    
+    if (!assignedForm) assignedForm = 'Form 1';
     const { data: newLearner, error } = await supabase
       .from('learners')
       .insert({
@@ -1127,34 +797,15 @@ app.post('/api/admin/learners', authenticateToken, authenticateAdmin, async (req
       })
       .select()
       .single();
-    
     if (error) {
       console.error('Insert error:', error);
-      return res.status(500).json({
-        success: false,
-        message: 'Database error: ' + error.message
-      });
+      return res.status(500).json({ success: false, message: 'Database error: ' + error.message });
     }
-    
-    await logAdminAction(
-      req.user.id,
-      'REGISTER_LEARNER',
-      `Registered learner: ${name} (${reg_number}) in class ${assignedClassId || 'unassigned'}. Teacher must accept them.`,
-      req.ip
-    );
-    
-    res.json({
-      success: true,
-      message: `Learner registered successfully. They will appear in the teacher's "Add Learners" modal for approval.`,
-      learner: newLearner
-    });
-    
+    await logAdminAction(req.user.id, 'REGISTER_LEARNER', `Registered learner: ${name} (${reg_number}) in class ${assignedClassId || 'unassigned'}. Teacher must accept them.`, req.ip);
+    res.json({ success: true, message: `Learner registered successfully. They will appear in the teacher's "Add Learners" modal for approval.`, learner: newLearner });
   } catch (err) {
     console.error('Error registering learner:', err);
-    res.status(500).json({
-      success: false,
-      message: 'Database error: ' + err.message
-    });
+    res.status(500).json({ success: false, message: 'Database error: ' + err.message });
   }
 });
 
@@ -1163,50 +814,26 @@ app.put('/api/admin/learners/:learnerId', authenticateToken, authenticateAdmin, 
   try {
     const { learnerId } = req.params;
     const { name, class_id, form } = req.body;
-    
     const updateData = {};
     if (name) updateData.name = name;
     if (class_id) updateData.class_id = class_id;
     if (form) updateData.form = form;
     updateData.updated_at = new Date().toISOString();
-    
     const { data: updatedLearner, error } = await supabase
       .from('learners')
       .update(updateData)
       .eq('id', learnerId)
       .select()
       .single();
-    
     if (error) {
-      if (error.code === 'PGRST116') {
-        return res.status(404).json({
-          success: false,
-          message: 'Learner not found'
-        });
-      }
+      if (error.code === 'PGRST116') return res.status(404).json({ success: false, message: 'Learner not found' });
       throw error;
     }
-    
-    await logAdminAction(
-      req.user.id,
-      'UPDATE_LEARNER',
-      `Updated learner ID ${learnerId}`,
-      req.ip
-    );
-    
-    res.json({
-      success: true,
-      message: 'Learner updated successfully',
-      learner: updatedLearner
-    });
-    
+    await logAdminAction(req.user.id, 'UPDATE_LEARNER', `Updated learner ID ${learnerId}`, req.ip);
+    res.json({ success: true, message: 'Learner updated successfully', learner: updatedLearner });
   } catch (err) {
     console.error('Error updating learner:', err);
-    res.status(500).json({
-      success: false,
-      message: 'Database error',
-      error: err.message
-    });
+    res.status(500).json({ success: false, message: 'Database error', error: err.message });
   }
 });
 
@@ -1214,43 +841,21 @@ app.put('/api/admin/learners/:learnerId', authenticateToken, authenticateAdmin, 
 app.delete('/api/admin/learners/:learnerId', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
     const { learnerId } = req.params;
-    
     const { data: deletedLearner, error } = await supabase
       .from('learners')
       .delete()
       .eq('id', learnerId)
       .select()
       .single();
-    
     if (error) {
-      if (error.code === 'PGRST116') {
-        return res.status(404).json({
-          success: false,
-          message: 'Learner not found'
-        });
-      }
+      if (error.code === 'PGRST116') return res.status(404).json({ success: false, message: 'Learner not found' });
       throw error;
     }
-    
-    await logAdminAction(
-      req.user.id,
-      'DELETE_LEARNER',
-      `Deleted learner ID ${learnerId}: ${deletedLearner.name}`,
-      req.ip
-    );
-    
-    res.json({
-      success: true,
-      message: 'Learner deleted successfully'
-    });
-    
+    await logAdminAction(req.user.id, 'DELETE_LEARNER', `Deleted learner ID ${learnerId}: ${deletedLearner.name}`, req.ip);
+    res.json({ success: true, message: 'Learner deleted successfully' });
   } catch (err) {
     console.error('Error deleting learner:', err);
-    res.status(500).json({
-      success: false,
-      message: 'Database error',
-      error: err.message
-    });
+    res.status(500).json({ success: false, message: 'Database error', error: err.message });
   }
 });
 
@@ -1259,15 +864,12 @@ app.get('/api/admin/audit-logs', authenticateToken, authenticateAdmin, async (re
   try {
     const limit = parseInt(req.query.limit) || 50;
     const offset = parseInt(req.query.offset) || 0;
-    
     const { data: logs, error, count } = await supabase
       .from('audit_logs')
       .select('*, user:user_id(id, name, email)', { count: 'exact' })
       .order('created_at', { ascending: false })
       .range(offset, offset + limit - 1);
-    
     if (error) throw error;
-    
     const formattedLogs = (logs || []).map(log => ({
       id: log.id,
       user_id: log.user_id,
@@ -1277,52 +879,23 @@ app.get('/api/admin/audit-logs', authenticateToken, authenticateAdmin, async (re
       ip_address: log.ip_address,
       created_at: log.created_at
     }));
-    
-    res.json({
-      success: true,
-      logs: formattedLogs,
-      total: count || 0
-    });
-    
+    res.json({ success: true, logs: formattedLogs, total: count || 0 });
   } catch (err) {
     console.error('Error fetching audit logs:', err);
-    res.status(500).json({
-      success: false,
-      message: 'Database error',
-      error: err.message
-    });
+    res.status(500).json({ success: false, message: 'Database error', error: err.message });
   }
 });
 
 // Clear all audit logs
 app.delete('/api/admin/audit-logs/clear', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
-    await logAdminAction(
-      req.user.id,
-      'CLEAR_LOGS',
-      'Cleared all audit logs',
-      req.ip
-    );
-    
-    const { error } = await supabase
-      .from('audit_logs')
-      .delete()
-      .neq('id', 0);
-    
+    await logAdminAction(req.user.id, 'CLEAR_LOGS', 'Cleared all audit logs', req.ip);
+    const { error } = await supabase.from('audit_logs').delete().neq('id', 0);
     if (error) throw error;
-    
-    res.json({
-      success: true,
-      message: 'All logs cleared successfully'
-    });
-    
+    res.json({ success: true, message: 'All logs cleared successfully' });
   } catch (err) {
     console.error('Error clearing logs:', err);
-    res.status(500).json({
-      success: false,
-      message: 'Database error',
-      error: err.message
-    });
+    res.status(500).json({ success: false, message: 'Database error', error: err.message });
   }
 });
 
@@ -1334,35 +907,20 @@ app.delete('/api/admin/audit-logs/clear', authenticateToken, authenticateAdmin, 
 app.get('/api/admin/subjects/:classId', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
     const { classId } = req.params;
-    
     console.log(`📚 Fetching subjects for class: ${classId}`);
-    
     const { data: subjects, error } = await supabase
       .from('subjects')
       .select('*')
       .eq('class_id', classId)
       .order('display_order', { ascending: true });
-    
     if (error) {
       console.log('Subjects table may not exist yet:', error.message);
-      return res.json({
-        success: true,
-        subjects: []
-      });
+      return res.json({ success: true, subjects: [] });
     }
-    
-    res.json({
-      success: true,
-      subjects: subjects || []
-    });
-    
+    res.json({ success: true, subjects: subjects || [] });
   } catch (err) {
     console.error('Error fetching subjects:', err);
-    res.status(500).json({
-      success: false,
-      message: 'Database error',
-      error: err.message
-    });
+    res.status(500).json({ success: false, message: 'Database error', error: err.message });
   }
 });
 
@@ -1370,43 +928,21 @@ app.get('/api/admin/subjects/:classId', authenticateToken, authenticateAdmin, as
 app.post('/api/admin/subjects', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
     const { class_id, name, code, description, display_order } = req.body;
-    
     console.log('📝 Creating new subject:', { class_id, name, code });
-    
-    if (!class_id || !name) {
-      return res.status(400).json({
-        success: false,
-        message: 'Class ID and subject name are required'
-      });
-    }
-    
+    if (!class_id || !name) return res.status(400).json({ success: false, message: 'Class ID and subject name are required' });
     const { data: classExists, error: classError } = await supabase
       .from('classes')
       .select('id')
       .eq('id', class_id)
       .maybeSingle();
-    
-    if (!classExists) {
-      return res.status(404).json({
-        success: false,
-        message: 'Class not found'
-      });
-    }
-    
+    if (!classExists) return res.status(404).json({ success: false, message: 'Class not found' });
     const { data: existing, error: checkError } = await supabase
       .from('subjects')
       .select('id')
       .eq('class_id', class_id)
       .eq('name', name)
       .maybeSingle();
-    
-    if (existing) {
-      return res.status(409).json({
-        success: false,
-        message: 'Subject already exists for this class'
-      });
-    }
-    
+    if (existing) return res.status(409).json({ success: false, message: 'Subject already exists for this class' });
     let finalDisplayOrder = display_order;
     if (!finalDisplayOrder) {
       const { data: maxOrder, error: orderError } = await supabase
@@ -1415,10 +951,8 @@ app.post('/api/admin/subjects', authenticateToken, authenticateAdmin, async (req
         .eq('class_id', class_id)
         .order('display_order', { ascending: false })
         .limit(1);
-      
       finalDisplayOrder = (maxOrder && maxOrder[0]?.display_order || 0) + 1;
     }
-    
     const { data: newSubject, error } = await supabase
       .from('subjects')
       .insert({
@@ -1433,28 +967,12 @@ app.post('/api/admin/subjects', authenticateToken, authenticateAdmin, async (req
       })
       .select()
       .single();
-    
     if (error) throw error;
-    
-    await logAdminAction(
-      req.user.id,
-      'CREATE_SUBJECT',
-      `Created subject: ${name} for class ID ${class_id}`,
-      req.ip
-    );
-    
-    res.json({
-      success: true,
-      message: 'Subject created successfully',
-      subject: newSubject
-    });
-    
+    await logAdminAction(req.user.id, 'CREATE_SUBJECT', `Created subject: ${name} for class ID ${class_id}`, req.ip);
+    res.json({ success: true, message: 'Subject created successfully', subject: newSubject });
   } catch (err) {
     console.error('Error creating subject:', err);
-    res.status(500).json({
-      success: false,
-      message: 'Database error: ' + err.message
-    });
+    res.status(500).json({ success: false, message: 'Database error: ' + err.message });
   }
 });
 
@@ -1463,7 +981,6 @@ app.put('/api/admin/subjects/:subjectId', authenticateToken, authenticateAdmin, 
   try {
     const { subjectId } = req.params;
     const { name, code, description, display_order, status } = req.body;
-    
     const updateData = {};
     if (name) updateData.name = name;
     if (code) updateData.code = code;
@@ -1471,44 +988,21 @@ app.put('/api/admin/subjects/:subjectId', authenticateToken, authenticateAdmin, 
     if (display_order !== undefined) updateData.display_order = display_order;
     if (status) updateData.status = status;
     updateData.updated_at = new Date().toISOString();
-    
     const { data: updatedSubject, error } = await supabase
       .from('subjects')
       .update(updateData)
       .eq('id', subjectId)
       .select()
       .single();
-    
     if (error) {
-      if (error.code === 'PGRST116') {
-        return res.status(404).json({
-          success: false,
-          message: 'Subject not found'
-        });
-      }
+      if (error.code === 'PGRST116') return res.status(404).json({ success: false, message: 'Subject not found' });
       throw error;
     }
-    
-    await logAdminAction(
-      req.user.id,
-      'UPDATE_SUBJECT',
-      `Updated subject ID ${subjectId}`,
-      req.ip
-    );
-    
-    res.json({
-      success: true,
-      message: 'Subject updated successfully',
-      subject: updatedSubject
-    });
-    
+    await logAdminAction(req.user.id, 'UPDATE_SUBJECT', `Updated subject ID ${subjectId}`, req.ip);
+    res.json({ success: true, message: 'Subject updated successfully', subject: updatedSubject });
   } catch (err) {
     console.error('Error updating subject:', err);
-    res.status(500).json({
-      success: false,
-      message: 'Database error',
-      error: err.message
-    });
+    res.status(500).json({ success: false, message: 'Database error', error: err.message });
   }
 });
 
@@ -1516,55 +1010,26 @@ app.put('/api/admin/subjects/:subjectId', authenticateToken, authenticateAdmin, 
 app.delete('/api/admin/subjects/:subjectId', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
     const { subjectId } = req.params;
-    
     const { count: reportsCount, error: checkReports } = await supabase
       .from('reports')
       .select('*', { count: 'exact', head: true })
       .eq('subject_id', subjectId);
-    
-    if (reportsCount > 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Cannot delete subject with existing report cards'
-      });
-    }
-    
+    if (reportsCount > 0) return res.status(400).json({ success: false, message: 'Cannot delete subject with existing report cards' });
     const { data: deletedSubject, error } = await supabase
       .from('subjects')
       .delete()
       .eq('id', subjectId)
       .select()
       .single();
-    
     if (error) {
-      if (error.code === 'PGRST116') {
-        return res.status(404).json({
-          success: false,
-          message: 'Subject not found'
-        });
-      }
+      if (error.code === 'PGRST116') return res.status(404).json({ success: false, message: 'Subject not found' });
       throw error;
     }
-    
-    await logAdminAction(
-      req.user.id,
-      'DELETE_SUBJECT',
-      `Deleted subject ID ${subjectId}: ${deletedSubject.name}`,
-      req.ip
-    );
-    
-    res.json({
-      success: true,
-      message: 'Subject deleted successfully'
-    });
-    
+    await logAdminAction(req.user.id, 'DELETE_SUBJECT', `Deleted subject ID ${subjectId}: ${deletedSubject.name}`, req.ip);
+    res.json({ success: true, message: 'Subject deleted successfully' });
   } catch (err) {
     console.error('Error deleting subject:', err);
-    res.status(500).json({
-      success: false,
-      message: 'Database error',
-      error: err.message
-    });
+    res.status(500).json({ success: false, message: 'Database error', error: err.message });
   }
 });
 
@@ -1577,7 +1042,6 @@ app.get('/api/admin/notifications', authenticateToken, authenticateAdmin, async 
       .eq('user_id', req.user.id)
       .eq('is_read', false)
       .order('created_at', { ascending: false });
-
     if (error) throw error;
     res.json({ success: true, notifications: notifications || [] });
   } catch (error) {
@@ -1594,7 +1058,6 @@ app.put('/api/admin/notifications/:id/read', authenticateToken, authenticateAdmi
       .update({ is_read: true, updated_at: new Date().toISOString() })
       .eq('id', id)
       .eq('user_id', req.user.id);
-
     if (error) throw error;
     res.json({ success: true, message: 'Notification marked as read' });
   } catch (error) {
@@ -1606,59 +1069,41 @@ app.put('/api/admin/notifications/:id/read', authenticateToken, authenticateAdmi
 // ADMIN QUIZ GRADING ENDPOINTS
 // ============================================
 
-// GET /api/admin/quizzes/:quizId/submissions
 app.get('/api/admin/quizzes/:quizId/submissions', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
     const { quizId } = req.params;
-    // Convert to integer because quizzes.id is INTEGER in your DB
     const numericQuizId = parseInt(quizId, 10);
     if (isNaN(numericQuizId)) {
       return res.status(400).json({ success: false, message: 'Invalid quiz ID' });
     }
-
     console.log(`📋 Admin fetching submissions for quiz ID: ${numericQuizId}`);
-
-    // Fetch all completed attempts for this quiz
     const { data: attempts, error } = await supabase
       .from('quiz_attempts')
       .select('*')
       .eq('quiz_id', numericQuizId)
       .eq('status', 'completed')
       .order('completed_at', { ascending: false });
-
     if (error) {
       console.error('Error fetching attempts:', error);
       return res.status(500).json({ success: false, message: error.message });
     }
-
-    if (!attempts || attempts.length === 0) {
-      return res.json({ success: true, submissions: [] });
-    }
-
-    // Get unique learner IDs
+    if (!attempts || attempts.length === 0) return res.json({ success: true, submissions: [] });
     const learnerIds = [...new Set(attempts.map(a => a.learner_id).filter(Boolean))];
     let learnerMap = {};
-
     if (learnerIds.length > 0) {
       const { data: learners, error: learnerErr } = await supabase
         .from('learners')
         .select('id, name, reg_number, form')
         .in('id', learnerIds);
-      if (!learnerErr && learners) {
-        learnerMap = Object.fromEntries(learners.map(l => [l.id, l]));
-      }
+      if (!learnerErr && learners) learnerMap = Object.fromEntries(learners.map(l => [l.id, l]));
     }
-
-    // Format submissions
     const formatted = attempts.map(attempt => {
       let answers = attempt.answers;
       if (typeof answers === 'string') {
         try { answers = JSON.parse(answers); } catch(e) { answers = []; }
       }
       if (!Array.isArray(answers)) answers = [];
-
       const learner = learnerMap[attempt.learner_id] || { name: 'Unknown', reg_number: 'N/A', form: 'N/A' };
-
       return {
         id: attempt.id,
         student_name: learner.name,
@@ -1680,7 +1125,6 @@ app.get('/api/admin/quizzes/:quizId/submissions', authenticateToken, authenticat
         }))
       };
     });
-
     res.json({ success: true, submissions: formatted });
   } catch (err) {
     console.error('Submissions endpoint error:', err);
@@ -1690,50 +1134,32 @@ app.get('/api/admin/quizzes/:quizId/submissions', authenticateToken, authenticat
 
 app.post('/api/admin/grade', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
-    const { attempt_id, answers } = req.body;  // frontend sends attempt_id and answers
-
-    if (!attempt_id) {
-      return res.status(400).json({ success: false, message: 'Missing attempt_id' });
-    }
-
+    const { attempt_id, answers } = req.body;
+    if (!attempt_id) return res.status(400).json({ success: false, message: 'Missing attempt_id' });
     console.log(`📝 Grading attempt: ${attempt_id}`);
-
-    // Fetch current attempt
     const { data: attempt, error: fetchError } = await supabase
       .from('quiz_attempts')
       .select('answers, earned_points, total_points')
       .eq('id', attempt_id)
       .single();
-
     if (fetchError) {
       console.error('Error fetching attempt:', fetchError);
       return res.status(404).json({ success: false, message: 'Attempt not found' });
     }
-
     let currentAnswers = attempt.answers;
     if (typeof currentAnswers === 'string') {
       try { currentAnswers = JSON.parse(currentAnswers); } catch(e) { currentAnswers = []; }
     }
     if (!Array.isArray(currentAnswers)) currentAnswers = [];
-
-    // Update each question with provided marks and feedback
     const updatedAnswers = currentAnswers.map(ans => {
       const grade = answers.find(a => a.question_id === ans.question_id);
       if (grade) {
-        return {
-          ...ans,
-          points_obtained: grade.marks_awarded,
-          feedback: grade.feedback || null
-        };
+        return { ...ans, points_obtained: grade.marks_awarded, feedback: grade.feedback || null };
       }
       return ans;
     });
-
-    // Recalculate total earned marks
     const newEarnedMarks = updatedAnswers.reduce((sum, ans) => sum + (ans.points_obtained || 0), 0);
     const totalMarks = attempt.total_points || 0;
-
-    // Update the attempt
     const { error: updateError } = await supabase
       .from('quiz_attempts')
       .update({
@@ -1742,18 +1168,11 @@ app.post('/api/admin/grade', authenticateToken, authenticateAdmin, async (req, r
         updated_at: new Date().toISOString()
       })
       .eq('id', attempt_id);
-
     if (updateError) {
       console.error('Error updating attempt:', updateError);
       return res.status(500).json({ success: false, message: updateError.message });
     }
-
-    res.json({
-      success: true,
-      message: 'Grades saved successfully',
-      earned_marks: newEarnedMarks,
-      total_marks: totalMarks
-    });
+    res.json({ success: true, message: 'Grades saved successfully', earned_marks: newEarnedMarks, total_marks: totalMarks });
   } catch (error) {
     console.error('Grade endpoint error:', error);
     res.status(500).json({ success: false, message: error.message });
@@ -1761,52 +1180,35 @@ app.post('/api/admin/grade', authenticateToken, authenticateAdmin, async (req, r
 });
 
 // ============================================
-// QUIZ SYSTEM ENDPOINTS (updated for marks & feedback)
+// QUIZ SYSTEM ENDPOINTS (UUID FIXED)
 // ============================================
 
-// Ping endpoint for quiz routes
 app.get('/api/quiz/ping', authenticateToken, (req, res) => {
   res.json({ success: true, message: 'Quiz routes are alive' });
 });
 
-// Get available subjects for quiz creation (admin)
 app.get('/api/admin/quiz-subjects', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
     console.log('📚 Fetching available subjects for quizzes');
-    
     const { data: subjects, error } = await supabase
       .from('subjects')
       .select('id, name, code, description')
       .eq('status', 'Active')
       .order('name', { ascending: true });
-    
     if (error) {
       console.error('Error fetching subjects:', error);
-      return res.status(500).json({
-        success: false,
-        message: 'Failed to fetch subjects: ' + error.message
-      });
+      return res.status(500).json({ success: false, message: 'Failed to fetch subjects: ' + error.message });
     }
-    
-    res.json({
-      success: true,
-      subjects: subjects || []
-    });
-    
+    res.json({ success: true, subjects: subjects || [] });
   } catch (error) {
     console.error('Error fetching quiz subjects:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch subjects: ' + error.message
-    });
+    res.status(500).json({ success: false, message: 'Failed to fetch subjects: ' + error.message });
   }
 });
 
-// Get all quizzes (admin)
 app.get('/api/admin/quizzes', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
     console.log('📚 Admin fetching all quizzes');
-    
     const { data: quizzes, error } = await supabase
       .from('quizzes')
       .select(`
@@ -1814,75 +1216,40 @@ app.get('/api/admin/quizzes', authenticateToken, authenticateAdmin, async (req, 
         subject:subject_id(id, name)
       `)
       .order('created_at', { ascending: false });
-
     if (error) {
       console.error('Error fetching quizzes:', error);
-      return res.status(500).json({ 
-        success: false, 
-        message: error.message 
-      });
+      return res.status(500).json({ success: false, message: error.message });
     }
-
     const quizzesWithCounts = await Promise.all((quizzes || []).map(async (quiz) => {
       const { count, error: countError } = await supabase
         .from('quiz_questions')
         .select('*', { count: 'exact', head: true })
         .eq('quiz_id', quiz.id);
-      
       return {
         ...quiz,
         subject_name: quiz.subject?.name || 'Unknown',
         question_count: count || 0
       };
     }));
-
-    res.json({ 
-      success: true, 
-      quizzes: quizzesWithCounts 
-    });
+    res.json({ success: true, quizzes: quizzesWithCounts });
   } catch (err) {
     console.error("❌ Error fetching quizzes:", err);
-    res.status(500).json({ 
-      success: false, 
-      message: err.message 
-    });
+    res.status(500).json({ success: false, message: err.message });
   }
 });
 
-// Create a new quiz (admin)
 app.post('/api/admin/quizzes', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
     const { subject_id, title, description, duration, total_marks, is_active, target_form } = req.body;
-    
     console.log('📝 Creating new quiz:', { subject_id, title, duration, target_form });
-    
-    if (!subject_id) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Subject ID is required' 
-      });
-    }
-    
-    if (!title) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Quiz title is required' 
-      });
-    }
-
+    if (!subject_id) return res.status(400).json({ success: false, message: 'Subject ID is required' });
+    if (!title) return res.status(400).json({ success: false, message: 'Quiz title is required' });
     const { data: subject, error: subjectError } = await supabase
       .from('subjects')
       .select('id, name')
       .eq('id', subject_id)
       .maybeSingle();
-    
-    if (subjectError || !subject) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Invalid subject selected' 
-      });
-    }
-
+    if (subjectError || !subject) return res.status(400).json({ success: false, message: 'Invalid subject selected' });
     const { data, error } = await supabase
       .from('quizzes')
       .insert({
@@ -1899,155 +1266,65 @@ app.post('/api/admin/quizzes', authenticateToken, authenticateAdmin, async (req,
       })
       .select()
       .single();
-
     if (error) {
       console.error("❌ Supabase Quiz Error:", error);
-      return res.status(400).json({ 
-        success: false, 
-        message: error.message,
-        details: error.details
-      });
+      return res.status(400).json({ success: false, message: error.message, details: error.details });
     }
-
     console.log('✅ Quiz created successfully:', data.id);
-    
-    await logAdminAction(
-      req.user.id,
-      'CREATE_QUIZ',
-      `Created quiz: ${title} for subject: ${subject.name} (Target: ${target_form || 'All'})`,
-      req.ip
-    );
-
-    res.status(201).json({ 
-      success: true, 
-      message: 'Quiz created successfully',
-      quiz: {
-        ...data,
-        subject_name: subject.name
-      }
-    });
+    await logAdminAction(req.user.id, 'CREATE_QUIZ', `Created quiz: ${title} for subject: ${subject.name} (Target: ${target_form || 'All'})`, req.ip);
+    res.status(201).json({ success: true, message: 'Quiz created successfully', quiz: { ...data, subject_name: subject.name } });
   } catch (err) {
     console.error("❌ Server Error:", err);
-    res.status(500).json({ 
-      success: false, 
-      message: err.message 
-    });
+    res.status(500).json({ success: false, message: err.message });
   }
 });
 
-// Get questions for a specific quiz (admin)
 app.get('/api/admin/quizzes/:quizId/questions', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
     const { quizId } = req.params;
-    
     console.log(`📝 Admin fetching questions for quiz: ${quizId}`);
-
     const { data: quiz, error: quizError } = await supabase
       .from('quizzes')
       .select('id, title')
       .eq('id', quizId)
       .single();
-
-    if (quizError) {
-      return res.status(404).json({
-        success: false,
-        message: 'Quiz not found'
-      });
-    }
-
+    if (quizError) return res.status(404).json({ success: false, message: 'Quiz not found' });
     const { data: questions, error: questionsError } = await supabase
       .from('quiz_questions')
       .select('*')
       .eq('quiz_id', quizId)
       .order('display_order', { ascending: true })
       .order('created_at', { ascending: true });
-
     if (questionsError) {
       console.error('Error fetching questions:', questionsError);
-      return res.status(500).json({
-        success: false,
-        message: 'Failed to fetch questions'
-      });
+      return res.status(500).json({ success: false, message: 'Failed to fetch questions' });
     }
-
-    res.json({
-      success: true,
-      questions: questions || []
-    });
+    res.json({ success: true, questions: questions || [] });
   } catch (error) {
     console.error('Error fetching admin quiz questions:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch quiz questions: ' + error.message
-    });
+    res.status(500).json({ success: false, message: 'Failed to fetch quiz questions: ' + error.message });
   }
 });
 
 app.post('/api/admin/quizzes/:quizId/questions', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
     const { quizId } = req.params;
-    const { 
-      question_text, 
-      options, 
-      correct_answer, 
-      explanation, 
-      marks, 
-      display_order, 
-      question_type, 
-      expected_answer,
-      question_image,        // <-- NEW
-      option_images,         // <-- NEW
-      answer_image           // <-- NEW
-    } = req.body;
-    
+    const { question_text, options, correct_answer, explanation, marks, display_order, question_type, expected_answer, question_image, option_images, answer_image } = req.body;
     console.log(`📝 Adding ${question_type || 'multiple_choice'} question to quiz: ${quizId}`);
-
-    if (!question_text && !question_image) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Either question text or an image is required' 
-      });
-    }
-
+    if (!question_text && !question_image) return res.status(400).json({ success: false, message: 'Either question text or an image is required' });
     const qType = question_type || 'multiple_choice';
-    
     if (qType === 'multiple_choice') {
-      if (!options || !Array.isArray(options) || options.length < 2) {
-        return res.status(400).json({ 
-          success: false, 
-          message: 'Multiple choice questions require at least 2 options' 
-        });
-      }
-      if (correct_answer === undefined || correct_answer === null) {
-        return res.status(400).json({ 
-          success: false, 
-          message: 'Multiple choice questions require a correct answer index' 
-        });
-      }
+      if (!options || !Array.isArray(options) || options.length < 2) return res.status(400).json({ success: false, message: 'Multiple choice questions require at least 2 options' });
+      if (correct_answer === undefined || correct_answer === null) return res.status(400).json({ success: false, message: 'Multiple choice questions require a correct answer index' });
     } else if (qType === 'short_answer') {
-      if (!expected_answer || !expected_answer.trim()) {
-        return res.status(400).json({ 
-          success: false, 
-          message: 'Short answer questions require an expected answer' 
-        });
-      }
+      if (!expected_answer || !expected_answer.trim()) return res.status(400).json({ success: false, message: 'Short answer questions require an expected answer' });
     }
-
-    // Verify quiz exists
     const { data: quiz, error: quizError } = await supabase
       .from('quizzes')
       .select('id, title, total_marks')
       .eq('id', quizId)
       .single();
-
-    if (quizError || !quiz) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Quiz not found' 
-      });
-    }
-
-    // Determine display order
+    if (quizError || !quiz) return res.status(404).json({ success: false, message: 'Quiz not found' });
     let finalDisplayOrder = display_order;
     if (!finalDisplayOrder) {
       const { data: maxOrder } = await supabase
@@ -2056,25 +1333,21 @@ app.post('/api/admin/quizzes/:quizId/questions', authenticateToken, authenticate
         .eq('quiz_id', quizId)
         .order('display_order', { ascending: false })
         .limit(1);
-      
       finalDisplayOrder = (maxOrder && maxOrder[0]?.display_order || 0) + 1;
     }
-
     const questionMarks = marks || 1;
-
     const questionData = {
       quiz_id: quizId,
       question_text: question_text || null,
-      question_image: question_image || null,     // <-- NEW
-      option_images: option_images || [],         // <-- NEW
-      answer_image: answer_image || null,         // <-- NEW
+      question_image: question_image || null,
+      option_images: option_images || [],
+      answer_image: answer_image || null,
       question_type: qType,
       marks: questionMarks,
       points: questionMarks,
       display_order: finalDisplayOrder,
       created_at: new Date().toISOString()
     };
-
     if (qType === 'multiple_choice') {
       questionData.options = options;
       questionData.correct_answer = correct_answer;
@@ -2084,71 +1357,40 @@ app.post('/api/admin/quizzes/:quizId/questions', authenticateToken, authenticate
       questionData.correct_answer = null;
       questionData.expected_answer = expected_answer?.trim().toLowerCase() || null;
     }
-
     const { data: question, error } = await supabase
       .from('quiz_questions')
       .insert(questionData)
       .select()
       .single();
-
     if (error) {
       console.error('Error inserting question:', error);
-      return res.status(500).json({ 
-        success: false, 
-        message: error.message 
-      });
+      return res.status(500).json({ success: false, message: error.message });
     }
-
-    // Update total marks for the quiz
     const { data: questions } = await supabase
       .from('quiz_questions')
       .select('marks')
       .eq('quiz_id', quizId);
-
     if (questions && questions.length > 0) {
       const totalMarks = questions.reduce((sum, q) => sum + (q.marks || 1), 0);
       const passingPoints = Math.round(totalMarks * 0.5);
-      
       await supabase
         .from('quizzes')
-        .update({ 
-          total_marks: totalMarks,
-          total_points: totalMarks,
-          passing_points: passingPoints,
-          updated_at: new Date().toISOString() 
-        })
+        .update({ total_marks: totalMarks, total_points: totalMarks, passing_points: passingPoints, updated_at: new Date().toISOString() })
         .eq('id', quizId);
     }
-
     console.log('✅ Question added successfully');
-    
-    await logAdminAction(
-      req.user.id,
-      'ADD_QUESTION',
-      `Added ${qType} question to quiz ID ${quizId}`,
-      req.ip
-    );
-
-    res.json({ 
-      success: true, 
-      message: 'Question added successfully',
-      question: question
-    });
+    await logAdminAction(req.user.id, 'ADD_QUESTION', `Added ${qType} question to quiz ID ${quizId}`, req.ip);
+    res.json({ success: true, message: 'Question added successfully', question: question });
   } catch (err) {
     console.error("❌ Error adding question:", err);
-    res.status(500).json({ 
-      success: false, 
-      message: err.message 
-    });
+    res.status(500).json({ success: false, message: err.message });
   }
 });
 
-// Update quiz (admin)
 app.put('/api/admin/quizzes/:quizId', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
     const { quizId } = req.params;
     const { subject_id, title, description, duration, total_marks, is_active, target_form } = req.body;
-    
     const updateData = {};
     if (subject_id) updateData.subject_id = subject_id;
     if (title) updateData.title = title;
@@ -2158,101 +1400,59 @@ app.put('/api/admin/quizzes/:quizId', authenticateToken, authenticateAdmin, asyn
     if (is_active !== undefined) updateData.is_active = is_active;
     if (target_form !== undefined) updateData.target_form = target_form;
     updateData.updated_at = new Date().toISOString();
-    
     const { data: quiz, error } = await supabase
       .from('quizzes')
       .update(updateData)
       .eq('id', quizId)
       .select()
       .single();
-
     if (error) {
-      if (error.code === 'PGRST116') {
-        return res.status(404).json({ 
-          success: false, 
-          message: 'Quiz not found' 
-        });
-      }
+      if (error.code === 'PGRST116') return res.status(404).json({ success: false, message: 'Quiz not found' });
       throw error;
     }
-
-    res.json({ 
-      success: true, 
-      message: 'Quiz updated successfully',
-      quiz: quiz
-    });
+    res.json({ success: true, message: 'Quiz updated successfully', quiz: quiz });
   } catch (err) {
     console.error("❌ Error updating quiz:", err);
-    res.status(500).json({ 
-      success: false, 
-      message: err.message 
-    });
+    res.status(500).json({ success: false, message: err.message });
   }
 });
 
-// Delete quiz (admin)
 app.delete('/api/admin/quizzes/:quizId', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
     const { quizId } = req.params;
-    
     console.log(`🗑️ Deleting quiz: ${quizId}`);
-
     const { data: quiz, error } = await supabase
       .from('quizzes')
       .delete()
       .eq('id', quizId)
       .select()
       .single();
-
     if (error) {
-      if (error.code === 'PGRST116') {
-        return res.status(404).json({ 
-          success: false, 
-          message: 'Quiz not found' 
-        });
-      }
+      if (error.code === 'PGRST116') return res.status(404).json({ success: false, message: 'Quiz not found' });
       throw error;
     }
-
-    await logAdminAction(
-      req.user.id,
-      'DELETE_QUIZ',
-      `Deleted quiz: ${quiz.title}`,
-      req.ip
-    );
-
-    res.json({ 
-      success: true, 
-      message: 'Quiz deleted successfully' 
-    });
+    await logAdminAction(req.user.id, 'DELETE_QUIZ', `Deleted quiz: ${quiz.title}`, req.ip);
+    res.json({ success: true, message: 'Quiz deleted successfully' });
   } catch (err) {
     console.error("❌ Error deleting quiz:", err);
-    res.status(500).json({ 
-      success: false, 
-      message: err.message 
-    });
+    res.status(500).json({ success: false, message: err.message });
   }
 });
 
-// Get all active quizzes for learners (filtered by form)
 app.get('/api/quiz/quizzes', authenticateToken, async (req, res) => {
   try {
     console.log('📚 Fetching quizzes for learner:', req.user.id);
-
     const { data: learner, error: learnerError } = await supabase
       .from('learners')
       .select('form')
       .eq('id', req.user.id)
       .single();
-
     if (learnerError || !learner) {
       console.error('Error fetching learner:', learnerError);
       return res.json({ success: true, quizzes: [] });
     }
-
     const learnerForm = learner.form;
     console.log(`Learner form: ${learnerForm}`);
-
     const { data: quizzes, error } = await supabase
       .from('quizzes')
       .select(`
@@ -2262,20 +1462,16 @@ app.get('/api/quiz/quizzes', authenticateToken, async (req, res) => {
       .eq('is_active', true)
       .in('target_form', ['All', learnerForm])
       .order('created_at', { ascending: false });
-
     if (error) {
       console.error('Error fetching quizzes:', error);
       return res.json({ success: true, quizzes: [] });
     }
-
     const quizzesWithCounts = await Promise.all((quizzes || []).map(async (quiz) => {
       const { data: questions, error: countError } = await supabase
         .from('quiz_questions')
         .select('marks')
         .eq('quiz_id', quiz.id);
-      
       const totalMarks = questions?.reduce((sum, q) => sum + (q.marks || 1), 0) || 0;
-      
       return {
         ...quiz,
         subject_name: quiz.subject?.name,
@@ -2284,181 +1480,98 @@ app.get('/api/quiz/quizzes', authenticateToken, async (req, res) => {
         passing_marks: quiz.passing_points || Math.round(totalMarks * 0.5)
       };
     }));
-
-    res.json({
-      success: true,
-      quizzes: quizzesWithCounts,
-      learner_form: learnerForm
-    });
+    res.json({ success: true, quizzes: quizzesWithCounts, learner_form: learnerForm });
   } catch (error) {
     console.error('Error fetching quizzes:', error);
-    res.json({ 
-      success: true, 
-      quizzes: [],
-      error: error.message 
-    });
+    res.json({ success: true, quizzes: [], error: error.message });
   }
 });
 
-// Get quiz questions for learners
 app.get('/api/quiz/:quizId/questions', authenticateToken, async (req, res) => {
   try {
     const { quizId } = req.params;
-    
-    // Convert to integer if your quizzes.id is integer
-    // If your quizzes.id is UUID, keep as string (but then your IDs must be UUIDs)
-    const numericQuizId = parseInt(quizId, 10);
-    if (isNaN(numericQuizId)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid quiz ID format'
-      });
-    }
-
-    console.log(`📝 Fetching questions for quiz ID: ${numericQuizId}`);
-
-    // Fetch quiz details with subject
+    console.log(`📝 Fetching questions for quiz ID: ${quizId}`);
     const { data: quiz, error: quizError } = await supabase
       .from('quizzes')
       .select(`
         *,
         subject:subject_id(id, name)
       `)
-      .eq('id', numericQuizId)
+      .eq('id', quizId)
       .single();
-
     if (quizError) {
       console.error('Quiz fetch error:', quizError);
-      return res.status(404).json({
-        success: false,
-        message: 'Quiz not found'
-      });
+      return res.status(404).json({ success: false, message: 'Quiz not found' });
     }
-
-    // Fetch questions
     const { data: questions, error: questionsError } = await supabase
       .from('quiz_questions')
       .select('*')
-      .eq('quiz_id', numericQuizId)
+      .eq('quiz_id', quizId)
       .order('display_order', { ascending: true })
       .order('created_at', { ascending: true });
-
     if (questionsError) {
       console.error('Questions fetch error:', questionsError);
-      return res.status(500).json({
-        success: false,
-        message: 'Failed to fetch questions'
-      });
+      return res.status(500).json({ success: false, message: 'Failed to fetch questions' });
     }
-
-    // Check for existing attempt (use numericQuizId)
     const { data: existingAttempt, error: attemptError } = await supabase
       .from('quiz_attempts')
       .select('id, status, score, earned_points, total_points, passed, answers')
       .eq('learner_id', req.user.id)
-      .eq('quiz_id', numericQuizId)
+      .eq('quiz_id', quizId)
       .maybeSingle();
-
-    if (attemptError) {
-      console.error('Attempt fetch error:', attemptError);
-      // Non-critical, continue without saved answers
-    }
-
+    if (attemptError) console.error('Attempt fetch error:', attemptError);
     if (existingAttempt && existingAttempt.status === 'completed') {
       return res.json({
         success: true,
         already_completed: true,
         attempt: existingAttempt,
-        quiz: {
-          ...quiz,
-          subject_name: quiz.subject?.name
-        }
+        quiz: { ...quiz, subject_name: quiz.subject?.name }
       });
     }
-
     let savedAnswers = null;
-    if (existingAttempt && existingAttempt.status === 'in-progress') {
-      savedAnswers = existingAttempt.answers;
-    }
-
+    if (existingAttempt && existingAttempt.status === 'in-progress') savedAnswers = existingAttempt.answers;
     res.json({
       success: true,
-      quiz: {
-        ...quiz,
-        subject_name: quiz.subject?.name
-      },
+      quiz: { ...quiz, subject_name: quiz.subject?.name },
       questions: questions || [],
       saved_answers: savedAnswers,
       attempt_id: existingAttempt?.id || null
     });
   } catch (error) {
     console.error('Error fetching quiz questions:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch quiz questions: ' + error.message
-    });
+    res.status(500).json({ success: false, message: 'Failed to fetch quiz questions: ' + error.message });
   }
 });
 
-// Start a quiz attempt
 app.post('/api/quiz/:quizId/start', authenticateToken, async (req, res) => {
   try {
     const { quizId } = req.params;
-
-    // Validate and convert to integer
-    const numericQuizId = parseInt(quizId, 10);
-    if (isNaN(numericQuizId)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid quiz ID format (must be an integer)'
-      });
-    }
-
-    console.log(`🎯 Starting quiz attempt for learner: ${req.user.id}, Quiz: ${numericQuizId}`);
-
-    // Fetch quiz using numeric ID
+    console.log(`🎯 Starting quiz attempt for learner: ${req.user.id}, Quiz: ${quizId}`);
     const { data: quiz, error: quizError } = await supabase
       .from('quizzes')
       .select('subject_id, subject:subject_id(name), total_marks, passing_points')
-      .eq('id', numericQuizId)
+      .eq('id', quizId)
       .single();
-
     if (quizError) {
       console.error('Quiz fetch error:', quizError);
-      return res.status(404).json({
-        success: false,
-        message: 'Quiz not found'
-      });
+      return res.status(404).json({ success: false, message: 'Quiz not found' });
     }
-
-    // Check for existing in-progress attempt (use numericQuizId)
     const { data: existingAttempt, error: checkError } = await supabase
       .from('quiz_attempts')
       .select('id')
       .eq('learner_id', req.user.id)
-      .eq('quiz_id', numericQuizId)
+      .eq('quiz_id', quizId)
       .eq('status', 'in-progress')
       .maybeSingle();
-
-    if (checkError) {
-      console.error('Check attempt error:', checkError);
-      // Non-critical, continue
-    }
-
+    if (checkError) console.error('Check attempt error:', checkError);
     if (existingAttempt) {
-      return res.json({
-        success: true,
-        attempt_id: existingAttempt.id,
-        message: 'Resuming existing attempt'
-      });
+      return res.json({ success: true, attempt_id: existingAttempt.id, message: 'Resuming existing attempt' });
     }
-
-    // Insert new attempt with numeric quiz_id
     const { data: attempt, error } = await supabase
       .from('quiz_attempts')
       .insert({
         learner_id: req.user.id,
-        quiz_id: numericQuizId,
+        quiz_id: quizId,
         subject_id: quiz.subject_id,
         subject: quiz.subject?.name,
         total_marks: quiz.total_marks || 0,
@@ -2467,43 +1580,28 @@ app.post('/api/quiz/:quizId/start', authenticateToken, async (req, res) => {
       })
       .select()
       .single();
-
     if (error) {
       console.error('Insert error:', error);
-      return res.status(500).json({
-        success: false,
-        message: 'Failed to start quiz: ' + error.message
-      });
+      return res.status(500).json({ success: false, message: 'Failed to start quiz: ' + error.message });
     }
-
     res.json({
       success: true,
       attempt_id: attempt.id,
       message: 'Quiz started successfully',
-      quiz: {
-        total_marks: quiz.total_marks,
-        passing_marks: quiz.passing_points
-      }
+      quiz: { total_marks: quiz.total_marks, passing_marks: quiz.passing_points }
     });
   } catch (error) {
     console.error('Error starting quiz:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to start quiz: ' + error.message
-    });
+    res.status(500).json({ success: false, message: 'Failed to start quiz: ' + error.message });
   }
 });
 
-// Save answer during quiz (AUTO-SAVE)
 app.post('/api/quiz/:quizId/save-answer', authenticateToken, async (req, res) => {
   try {
     const { quizId } = req.params;
     const { question_index, answer, attempt_id } = req.body;
-    
     console.log(`💾 Saving answer for quiz: ${quizId}, Question: ${question_index}`);
-
     let attempt = null;
-    
     if (attempt_id) {
       const { data, error } = await supabase
         .from('quiz_attempts')
@@ -2512,12 +1610,8 @@ app.post('/api/quiz/:quizId/save-answer', authenticateToken, async (req, res) =>
         .eq('learner_id', req.user.id)
         .eq('status', 'in-progress')
         .maybeSingle();
-      
-      if (!error && data) {
-        attempt = data;
-      }
+      if (!error && data) attempt = data;
     }
-    
     if (!attempt) {
       const { data, error } = await supabase
         .from('quiz_attempts')
@@ -2526,75 +1620,36 @@ app.post('/api/quiz/:quizId/save-answer', authenticateToken, async (req, res) =>
         .eq('quiz_id', quizId)
         .eq('status', 'in-progress')
         .maybeSingle();
-      
-      if (!error && data) {
-        attempt = data;
-      }
+      if (!error && data) attempt = data;
     }
-    
-    if (!attempt) {
-      return res.status(404).json({
-        success: false,
-        message: 'No active quiz attempt found'
-      });
-    }
-    
+    if (!attempt) return res.status(404).json({ success: false, message: 'No active quiz attempt found' });
     let currentAnswers = attempt.answers || {};
-    
     if (typeof currentAnswers === 'string') {
-      try {
-        currentAnswers = JSON.parse(currentAnswers);
-      } catch (e) {
-        currentAnswers = {};
-      }
+      try { currentAnswers = JSON.parse(currentAnswers); } catch(e) { currentAnswers = {}; }
     }
-    
     currentAnswers[question_index] = answer;
-    
     const { error: updateError } = await supabase
       .from('quiz_attempts')
-      .update({
-        answers: currentAnswers,
-        updated_at: new Date().toISOString()
-      })
+      .update({ answers: currentAnswers, updated_at: new Date().toISOString() })
       .eq('id', attempt.id);
-    
     if (updateError) {
       console.error('Error saving answer:', updateError);
-      return res.status(500).json({
-        success: false,
-        message: 'Failed to save answer: ' + updateError.message
-      });
+      return res.status(500).json({ success: false, message: 'Failed to save answer: ' + updateError.message });
     }
-    
     console.log(`✅ Answer saved successfully for question ${question_index}`);
-    
-    res.json({
-      success: true,
-      message: 'Answer saved successfully'
-    });
-    
+    res.json({ success: true, message: 'Answer saved successfully' });
   } catch (error) {
     console.error('Error in save-answer endpoint:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to save answer: ' + error.message
-    });
+    res.status(500).json({ success: false, message: 'Failed to save answer: ' + error.message });
   }
 });
 
-// Submit quiz answers (updated to return marks_earned and total_marks)
 app.post('/api/quiz/:quizId/submit', authenticateToken, async (req, res) => {
   try {
     const { quizId } = req.params;
     const { answers, time_taken, attempt_id } = req.body;
     const learnerId = req.user.id;
-
-    if (!attempt_id) {
-      return res.status(400).json({ success: false, message: 'Missing attempt_id' });
-    }
-
-    // Fetch the attempt (must be in-progress)
+    if (!attempt_id) return res.status(400).json({ success: false, message: 'Missing attempt_id' });
     const { data: attempt, error: attemptError } = await supabase
       .from('quiz_attempts')
       .select('id, status')
@@ -2602,50 +1657,35 @@ app.post('/api/quiz/:quizId/submit', authenticateToken, async (req, res) => {
       .eq('learner_id', learnerId)
       .eq('status', 'in-progress')
       .single();
-
-    if (attemptError || !attempt) {
-      return res.status(404).json({ success: false, message: 'No active attempt found' });
-    }
-
-    // Fetch quiz questions
+    if (attemptError || !attempt) return res.status(404).json({ success: false, message: 'No active attempt found' });
     const { data: questions, error: qError } = await supabase
       .from('quiz_questions')
       .select('*')
-      .eq('quiz_id', quizId);
-
+      .eq('quiz_id', quizId)
+      .order('display_order', { ascending: true });
     if (qError) throw qError;
-
-    // Fetch quiz details and learner name
     const { data: quiz, error: quizError } = await supabase
       .from('quizzes')
       .select('title, total_marks, passing_points')
       .eq('id', quizId)
       .single();
-
     if (quizError) throw quizError;
-
     const { data: learner, error: learnerError } = await supabase
       .from('learners')
       .select('name')
       .eq('id', learnerId)
       .single();
-
     if (learnerError) throw learnerError;
-
-    // Calculate score
     let earnedPoints = 0;
     let totalPossiblePoints = 0;
     let correctCount = 0;
     const gradedAnswers = [];
-
     questions.forEach((question, idx) => {
       const userAnswer = answers && answers[idx] !== undefined ? answers[idx] : null;
       let isCorrect = false;
       let pointsObtained = 0;
       let userAnswerText = '';
-
       totalPossiblePoints += (question.marks || 1);
-
       if (question.question_type === 'multiple_choice') {
         const selectedOption = parseInt(userAnswer);
         userAnswerText = question.options[selectedOption] || 'Not answered';
@@ -2657,34 +1697,27 @@ app.post('/api/quiz/:quizId/submit', authenticateToken, async (req, res) => {
         isCorrect = (userAnswerText === expected) || (expected && userAnswerText.includes(expected));
         pointsObtained = isCorrect ? (question.marks || 1) : 0;
       }
-
       if (isCorrect) correctCount++;
       earnedPoints += pointsObtained;
-
       gradedAnswers.push({
         question_id: question.id,
         question_text: question.question_text,
-        question_image: question.question_image || null,       // <-- ADD
-        option_images: question.option_images || [],           // <-- ADD (for multiple choice)
-        answer_image: question.answer_image || null,  
+        question_image: question.question_image || null,
+        option_images: question.option_images || [],
+        answer_image: question.answer_image || null,
         question_type: question.question_type,
         selected_answer: userAnswer,
         selected_answer_text: userAnswerText || 'Not answered',
         is_correct: isCorrect,
         points_obtained: pointsObtained,
         max_points: question.marks || 1,
-        correct_answer: question.question_type === 'multiple_choice'
-          ? question.options[question.correct_answer]
-          : question.expected_answer,
+        correct_answer: question.question_type === 'multiple_choice' ? question.options[question.correct_answer] : question.expected_answer,
         explanation: question.explanation,
         feedback: null
       });
     });
-
     const percentage = totalPossiblePoints > 0 ? (earnedPoints / totalPossiblePoints) * 100 : 0;
     const passed = earnedPoints >= (quiz.passing_points || Math.round(totalPossiblePoints * 0.5));
-
-    // Update attempt with results
     const { data: updatedAttempt, error: updateError } = await supabase
       .from('quiz_attempts')
       .update({
@@ -2702,11 +1735,7 @@ app.post('/api/quiz/:quizId/submit', authenticateToken, async (req, res) => {
       .eq('id', attempt_id)
       .select()
       .single();
-
     if (updateError) throw updateError;
-
-    // -------- NOTIFICATION FOR ADMIN --------
-    // 1. Log to audit_logs (already used for admin actions)
     await supabase.from('audit_logs').insert({
       user_id: learnerId,
       action: 'QUIZ_COMPLETED',
@@ -2714,14 +1743,11 @@ app.post('/api/quiz/:quizId/submit', authenticateToken, async (req, res) => {
       ip_address: req.ip,
       created_at: new Date().toISOString()
     });
-
-    // 2. Create a notification for all admin users (or a specific admin)
     const { data: admins, error: adminsError } = await supabase
       .from('users')
       .select('id')
       .eq('role', 'admin')
       .eq('is_active', true);
-
     if (!adminsError && admins && admins.length) {
       const notificationInserts = admins.map(admin => ({
         user_id: admin.id,
@@ -2734,8 +1760,6 @@ app.post('/api/quiz/:quizId/submit', authenticateToken, async (req, res) => {
       }));
       await supabase.from('notifications').insert(notificationInserts);
     }
-
-    // Return result
     res.json({
       success: true,
       marks_earned: earnedPoints,
@@ -2747,9 +1771,7 @@ app.post('/api/quiz/:quizId/submit', authenticateToken, async (req, res) => {
       passing_score: quiz.passing_points || Math.round(totalPossiblePoints * 0.5),
       answers: gradedAnswers,
       feedback: null,
-      message: passed
-        ? `🎉 Congratulations! You passed with ${earnedPoints}/${totalPossiblePoints} marks!`
-        : `📚 Keep practicing! You got ${earnedPoints}/${totalPossiblePoints} marks.`
+      message: passed ? `🎉 Congratulations! You passed with ${earnedPoints}/${totalPossiblePoints} marks!` : `📚 Keep practicing! You got ${earnedPoints}/${totalPossiblePoints} marks.`
     });
   } catch (error) {
     console.error('Submit quiz error:', error);
@@ -2757,18 +1779,11 @@ app.post('/api/quiz/:quizId/submit', authenticateToken, async (req, res) => {
   }
 });
 
-// ============================================
-// NEW ENDPOINT: Get full details of a specific quiz attempt (for revision)
-// ============================================
-// Get full details of a specific quiz attempt (for revision)
 app.get('/api/quiz/attempt/:attemptId', authenticateToken, async (req, res) => {
   try {
     const { attemptId } = req.params;
     const learnerId = req.user.id;
-
     console.log(`📝 Fetching attempt details for attemptId: ${attemptId}, learner: ${learnerId}`);
-
-    // Fetch attempt with quiz info
     const { data: attempt, error } = await supabase
       .from('quiz_attempts')
       .select(`
@@ -2785,37 +1800,27 @@ app.get('/api/quiz/attempt/:attemptId', authenticateToken, async (req, res) => {
       .eq('id', attemptId)
       .eq('learner_id', learnerId)
       .single();
-
     if (error || !attempt) {
       console.error('Error fetching attempt:', error);
       return res.status(404).json({ success: false, message: 'Attempt not found' });
     }
-
-    // Fetch quiz title separately
     const { data: quiz, error: quizError } = await supabase
       .from('quizzes')
       .select('title, subject')
       .eq('id', attempt.quiz_id)
       .single();
-
-    if (quizError) {
-      console.error('Error fetching quiz:', quizError);
-    }
-
-    // Parse answers if stored as JSON string
+    if (quizError) console.error('Error fetching quiz:', quizError);
     let answers = attempt.answers;
     if (typeof answers === 'string') {
-      try { answers = JSON.parse(answers); } catch (e) { answers = []; }
+      try { answers = JSON.parse(answers); } catch(e) { answers = []; }
     }
     if (!Array.isArray(answers)) answers = [];
-
-    // Format each answer
     const formattedAnswers = answers.map((ans, idx) => ({
       question_id: ans.question_id || idx,
       question_text: ans.question_text || '',
-      question_image: ans.question_image || null,     // <-- ADD
-      option_images: ans.option_images || [],         // <-- ADD
-      answer_image: ans.answer_image || null,  
+      question_image: ans.question_image || null,
+      option_images: ans.option_images || [],
+      answer_image: ans.answer_image || null,
       question_type: ans.question_type || 'multiple_choice',
       selected_answer: ans.selected_answer,
       selected_answer_text: ans.selected_answer_text || 'Not answered',
@@ -2826,7 +1831,6 @@ app.get('/api/quiz/attempt/:attemptId', authenticateToken, async (req, res) => {
       explanation: ans.explanation || null,
       feedback: ans.feedback || null
     }));
-
     res.json({
       success: true,
       attempt: {
@@ -2849,22 +1853,17 @@ app.get('/api/quiz/attempt/:attemptId', authenticateToken, async (req, res) => {
   }
 });
 
-// Get learner's quiz history (updated to include marks and feedback)
 app.get('/api/quiz/history', authenticateToken, async (req, res) => {
   try {
     console.log(`📊 Fetching quiz history for learner: ${req.user.id}`);
-
-    // Check if table exists (optional)
     const { data: tableCheck, error: tableError } = await supabase
       .from('quiz_attempts')
       .select('count')
       .limit(1)
       .maybeSingle();
-
     if (tableError && tableError.message && tableError.message.includes('does not exist')) {
       return res.json({ success: true, attempts: [], message: 'No quiz attempts available yet' });
     }
-
     const { data: attempts, error } = await supabase
       .from('quiz_attempts')
       .select(`
@@ -2884,12 +1883,10 @@ app.get('/api/quiz/history', authenticateToken, async (req, res) => {
       .eq('learner_id', req.user.id)
       .eq('status', 'completed')
       .order('completed_at', { ascending: false });
-
     if (error) {
       console.error('Error fetching attempts:', error);
       return res.json({ success: true, attempts: [] });
     }
-
     const formattedAttempts = [];
     for (const attempt of (attempts || [])) {
       try {
@@ -2898,7 +1895,6 @@ app.get('/api/quiz/history', authenticateToken, async (req, res) => {
           .select('id, title, total_marks, passing_points')
           .eq('id', attempt.quiz_id)
           .maybeSingle();
-
         formattedAttempts.push({
           id: attempt.id,
           quiz_id: attempt.quiz_id,
@@ -2931,75 +1927,35 @@ app.get('/api/quiz/history', authenticateToken, async (req, res) => {
         });
       }
     }
-
     console.log(`✅ Found ${formattedAttempts.length} completed attempts`);
-
-    res.json({
-      success: true,
-      attempts: formattedAttempts
-    });
+    res.json({ success: true, attempts: formattedAttempts });
   } catch (error) {
     console.error('Error in quiz history endpoint:', error);
-    res.json({
-      success: true,
-      attempts: [],
-      message: 'Unable to load quiz history at this time'
-    });
+    res.json({ success: true, attempts: [], message: 'Unable to load quiz history at this time' });
   }
 });
 
-// Verify quiz access with registration number
 app.post('/api/quiz/:quizId/verify', authenticateToken, async (req, res) => {
   try {
     const { quizId } = req.params;
     const { regNumber } = req.body;
-    
     console.log(`🔐 Verifying quiz access for learner: ${req.user.id}, Quiz: ${quizId}`);
-    
     const { data: learner, error: learnerError } = await supabase
       .from('learners')
       .select('reg_number, id, name, form')
       .eq('id', req.user.id)
       .single();
-    
-    if (learnerError || !learner) {
-      return res.status(404).json({
-        success: false,
-        message: 'Learner not found. Please login again.'
-      });
-    }
-    
+    if (learnerError || !learner) return res.status(404).json({ success: false, message: 'Learner not found. Please login again.' });
     const isValid = learner.reg_number.toUpperCase() === regNumber.toUpperCase();
-    
-    if (!isValid) {
-      return res.status(403).json({
-        success: false,
-        message: 'Invalid registration number. Access denied.'
-      });
-    }
-    
+    if (!isValid) return res.status(403).json({ success: false, message: 'Invalid registration number. Access denied.' });
     const { data: quiz, error: quizError } = await supabase
       .from('quizzes')
       .select('id, title, is_active, duration, total_marks, target_form')
       .eq('id', quizId)
       .single();
-    
-    if (quizError || !quiz) {
-      return res.status(404).json({
-        success: false,
-        message: 'Quiz not found'
-      });
-    }
-    
-    if (!quiz.is_active) {
-      return res.status(403).json({
-        success: false,
-        message: 'This quiz is not currently available'
-      });
-    }
-    
+    if (quizError || !quiz) return res.status(404).json({ success: false, message: 'Quiz not found' });
+    if (!quiz.is_active) return res.status(403).json({ success: false, message: 'This quiz is not currently available' });
     const isEligible = quiz.target_form === 'All' || quiz.target_form === learner.form;
-    
     if (!isEligible) {
       return res.status(403).json({
         success: false,
@@ -3009,14 +1965,7 @@ app.post('/api/quiz/:quizId/verify', authenticateToken, async (req, res) => {
         your_form: learner.form
       });
     }
-    
-    await logAdminAction(
-      req.user.id,
-      'QUIZ_ACCESS',
-      `Learner ${learner.name} (${learner.reg_number}, ${learner.form}) accessed quiz: ${quiz.title}`,
-      req.ip
-    );
-    
+    await logAdminAction(req.user.id, 'QUIZ_ACCESS', `Learner ${learner.name} (${learner.reg_number}, ${learner.form}) accessed quiz: ${quiz.title}`, req.ip);
     res.json({
       success: true,
       message: 'Access granted',
@@ -3027,71 +1976,54 @@ app.post('/api/quiz/:quizId/verify', authenticateToken, async (req, res) => {
         total_marks: quiz.total_marks,
         target_form: quiz.target_form
       },
-      learner: {
-        form: learner.form,
-        is_eligible: true
-      }
+      learner: { form: learner.form, is_eligible: true }
     });
-    
   } catch (error) {
     console.error('Error verifying quiz access:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to verify access. Please try again.'
-    });
+    res.status(500).json({ success: false, message: 'Failed to verify access. Please try again.' });
   }
 });
 
 // ============================================
-// TEACHER ROUTES
+// TEACHER ROUTES (all unchanged)
 // ============================================
 app.get('/api/teacher/dashboard/stats', authenticateToken, async (req, res) => {
   try {
     console.log('📊 Fetching teacher dashboard stats for user:', req.user.id);
-    
     const { data: teacher, error: teacherError } = await supabase
       .from('users')
       .select('class_id')
       .eq('id', req.user.id)
       .maybeSingle();
-    
     if (teacherError) throw teacherError;
-    
     let totalLearners = 0;
     let totalReports = 0;
     let attendanceRate = 0;
     let presentToday = 0;
     let totalToday = 0;
-    
     if (teacher?.class_id) {
       const { count: learnersCount, error: learnersError } = await supabase
         .from('learners')
         .select('*', { count: 'exact', head: true })
         .eq('class_id', teacher.class_id)
         .eq('status', 'Active');
-      
       if (!learnersError) totalLearners = learnersCount || 0;
-      
       const { count: reportsCount, error: reportsError } = await supabase
         .from('reports')
         .select('*', { count: 'exact', head: true })
         .eq('class_id', teacher.class_id);
-      
       if (!reportsError) totalReports = reportsCount || 0;
-      
       const today = new Date().toISOString().split('T')[0];
       const { data: todayAttendance, error: attendanceError } = await supabase
         .from('attendance')
         .select('status, learner_id')
         .eq('date', today);
-      
       if (!attendanceError && todayAttendance && todayAttendance.length > 0) {
         totalToday = todayAttendance.length;
         presentToday = todayAttendance.filter(a => a.status === 'present').length;
         attendanceRate = totalToday > 0 ? Math.round((presentToday / totalToday) * 100) : 0;
       }
     }
-    
     res.json({
       success: true,
       data: {
@@ -3102,35 +2034,22 @@ app.get('/api/teacher/dashboard/stats', authenticateToken, async (req, res) => {
         totalToday: totalToday
       }
     });
-    
   } catch (err) {
     console.error('Error fetching teacher stats:', err);
-    res.status(500).json({
-      success: false,
-      message: 'Database error: ' + err.message
-    });
+    res.status(500).json({ success: false, message: 'Database error: ' + err.message });
   }
 });
 
 app.get('/api/teacher/all-learners', authenticateToken, async (req, res) => {
   try {
     console.log('📚 Fetching all learners for teacher to add');
-    
     const { data: teacher, error: teacherError } = await supabase
       .from('users')
       .select('class_id')
       .eq('id', req.user.id)
       .maybeSingle();
-    
     if (teacherError) throw teacherError;
-    
-    if (!teacher?.class_id) {
-      return res.json({
-        success: true,
-        learners: []
-      });
-    }
-    
+    if (!teacher?.class_id) return res.json({ success: true, learners: [] });
     const { data: learners, error } = await supabase
       .from('learners')
       .select('id, name, reg_number, form, status, class_id, is_accepted_by_teacher')
@@ -3138,42 +2057,24 @@ app.get('/api/teacher/all-learners', authenticateToken, async (req, res) => {
       .eq('is_accepted_by_teacher', false)
       .eq('status', 'Active')
       .order('name', { ascending: true });
-    
     if (error) throw error;
-    
-    res.json({
-      success: true,
-      learners: learners || []
-    });
-    
+    res.json({ success: true, learners: learners || [] });
   } catch (err) {
     console.error('Error fetching all learners:', err);
-    res.status(500).json({
-      success: false,
-      message: 'Database error: ' + err.message
-    });
+    res.status(500).json({ success: false, message: 'Database error: ' + err.message });
   }
 });
 
 app.get('/api/teacher/my-learners', authenticateToken, async (req, res) => {
   try {
     console.log('👥 Fetching learners accepted by teacher:', req.user.id);
-    
     const { data: teacher, error: teacherError } = await supabase
       .from('users')
       .select('class_id')
       .eq('id', req.user.id)
       .maybeSingle();
-    
     if (teacherError) throw teacherError;
-    
-    if (!teacher?.class_id) {
-      return res.json({
-        success: true,
-        learners: []
-      });
-    }
-    
+    if (!teacher?.class_id) return res.json({ success: true, learners: [] });
     const { data: learners, error } = await supabase
       .from('learners')
       .select('id, name, reg_number, form, status, class_id')
@@ -3181,158 +2082,74 @@ app.get('/api/teacher/my-learners', authenticateToken, async (req, res) => {
       .eq('is_accepted_by_teacher', true)
       .eq('status', 'Active')
       .order('name', { ascending: true });
-    
     if (error) throw error;
-    
-    res.json({
-      success: true,
-      learners: learners || []
-    });
-    
+    res.json({ success: true, learners: learners || [] });
   } catch (err) {
     console.error('Error fetching my learners:', err);
-    res.status(500).json({
-      success: false,
-      message: 'Database error: ' + err.message
-    });
+    res.status(500).json({ success: false, message: 'Database error: ' + err.message });
   }
 });
 
 app.post('/api/teacher/add-learners', authenticateToken, async (req, res) => {
   try {
     const { learnerIds } = req.body;
-    
     console.log('📝 Accepting learners to teacher class:', { learnerIds });
-    
-    if (!learnerIds || !Array.isArray(learnerIds) || learnerIds.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Please select at least one learner'
-      });
-    }
-    
+    if (!learnerIds || !Array.isArray(learnerIds) || learnerIds.length === 0) return res.status(400).json({ success: false, message: 'Please select at least one learner' });
     const { data: teacher, error: teacherError } = await supabase
       .from('users')
       .select('class_id')
       .eq('id', req.user.id)
       .maybeSingle();
-    
     if (teacherError) throw teacherError;
-    
-    if (!teacher?.class_id) {
-      return res.status(400).json({
-        success: false,
-        message: 'You have not been assigned to a class yet. Please contact administrator.'
-      });
-    }
-    
+    if (!teacher?.class_id) return res.status(400).json({ success: false, message: 'You have not been assigned to a class yet. Please contact administrator.' });
     const { data: learnersToAccept, error: checkError } = await supabase
       .from('learners')
       .select('id, name')
       .in('id', learnerIds)
       .eq('class_id', teacher.class_id)
       .eq('is_accepted_by_teacher', false);
-    
     if (checkError) throw checkError;
-    
-    if (learnersToAccept.length !== learnerIds.length) {
-      return res.status(400).json({
-        success: false,
-        message: 'Some learners are not available to accept'
-      });
-    }
-    
+    if (learnersToAccept.length !== learnerIds.length) return res.status(400).json({ success: false, message: 'Some learners are not available to accept' });
     const { data, error } = await supabase
       .from('learners')
-      .update({ 
-        is_accepted_by_teacher: true,
-        updated_at: new Date().toISOString() 
-      })
+      .update({ is_accepted_by_teacher: true, updated_at: new Date().toISOString() })
       .in('id', learnerIds)
       .select();
-    
     if (error) throw error;
-    
-    await logAdminAction(
-      req.user.id,
-      'ACCEPT_LEARNERS',
-      `Teacher accepted ${learnerIds.length} learner(s) into class`,
-      req.ip
-    );
-    
-    res.json({
-      success: true,
-      message: `${learnerIds.length} learner(s) added to your class`,
-      learners: data
-    });
-    
+    await logAdminAction(req.user.id, 'ACCEPT_LEARNERS', `Teacher accepted ${learnerIds.length} learner(s) into class`, req.ip);
+    res.json({ success: true, message: `${learnerIds.length} learner(s) added to your class`, learners: data });
   } catch (err) {
     console.error('Error accepting learners:', err);
-    res.status(500).json({
-      success: false,
-      message: 'Database error: ' + err.message
-    });
+    res.status(500).json({ success: false, message: 'Database error: ' + err.message });
   }
 });
 
 app.delete('/api/teacher/remove-learner/:learnerId', authenticateToken, async (req, res) => {
   try {
     const { learnerId } = req.params;
-    
     console.log('🗑️ Removing learner from teacher class:', learnerId);
-    
     const { data: teacher, error: teacherError } = await supabase
       .from('users')
       .select('class_id')
       .eq('id', req.user.id)
       .maybeSingle();
-    
     if (teacherError) throw teacherError;
-    
-    if (!teacher?.class_id) {
-      return res.status(400).json({
-        success: false,
-        message: 'You have not been assigned to a class yet.'
-      });
-    }
-    
+    if (!teacher?.class_id) return res.status(400).json({ success: false, message: 'You have not been assigned to a class yet.' });
     const { data: updatedLearner, error } = await supabase
       .from('learners')
-      .update({ 
-        is_accepted_by_teacher: false,
-        updated_at: new Date().toISOString() 
-      })
+      .update({ is_accepted_by_teacher: false, updated_at: new Date().toISOString() })
       .eq('id', parseInt(learnerId))
       .eq('class_id', teacher.class_id)
       .select();
-    
     if (error) {
       console.error('Error updating learner:', error);
-      return res.status(500).json({
-        success: false,
-        message: 'Failed to remove learner: ' + error.message
-      });
+      return res.status(500).json({ success: false, message: 'Failed to remove learner: ' + error.message });
     }
-    
-    if (!updatedLearner || updatedLearner.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'Learner not found in your class'
-      });
-    }
-    
-    res.json({
-      success: true,
-      message: `Learner removed from your class and will appear in "Add Learners" list again`,
-      learner: updatedLearner[0]
-    });
-    
+    if (!updatedLearner || updatedLearner.length === 0) return res.status(404).json({ success: false, message: 'Learner not found in your class' });
+    res.json({ success: true, message: `Learner removed from your class and will appear in "Add Learners" list again`, learner: updatedLearner[0] });
   } catch (err) {
     console.error('Error removing learner:', err);
-    res.status(500).json({
-      success: false,
-      message: 'Server error: ' + err.message
-    });
+    res.status(500).json({ success: false, message: 'Server error: ' + err.message });
   }
 });
 
@@ -3340,8 +2157,6 @@ app.delete('/api/teacher/remove-learner/:learnerId', authenticateToken, async (r
 app.get('/api/teacher/reports', authenticateToken, async (req, res) => {
   try {
     const teacherId = req.user.id;
-
-    // 1. Get teacher's class
     const { data: teacher, error: teacherError } = await supabase
       .from('users')
       .select('class_id')
@@ -3349,8 +2164,6 @@ app.get('/api/teacher/reports', authenticateToken, async (req, res) => {
       .maybeSingle();
     if (teacherError) throw teacherError;
     if (!teacher?.class_id) return res.json({ success: true, data: [] });
-
-    // 2. Get all accepted learners in that class
     const { data: learners, error: learnersError } = await supabase
       .from('learners')
       .select('id')
@@ -3359,16 +2172,12 @@ app.get('/api/teacher/reports', authenticateToken, async (req, res) => {
     if (learnersError) throw learnersError;
     const learnerIds = learners?.map(l => l.id) || [];
     if (learnerIds.length === 0) return res.json({ success: true, data: [] });
-
-    // 3. Fetch reports for those learners (no class_id assumption)
     const { data: reports, error: reportsError } = await supabase
       .from('reports')
       .select('*')
       .in('learner_id', learnerIds)
       .order('created_at', { ascending: false });
     if (reportsError) throw reportsError;
-
-    // 4. Fetch learner names separately
     const { data: learnerDetails, error: detailsError } = await supabase
       .from('learners')
       .select('id, name, reg_number')
@@ -3376,14 +2185,11 @@ app.get('/api/teacher/reports', authenticateToken, async (req, res) => {
     if (detailsError) throw detailsError;
     const learnerMap = {};
     learnerDetails?.forEach(l => { learnerMap[l.id] = { name: l.name, reg_number: l.reg_number }; });
-
-    // 5. Enrich reports
     const enriched = (reports || []).map(r => ({
       ...r,
       learner_name: learnerMap[r.learner_id]?.name || 'Unknown',
       learner_reg: learnerMap[r.learner_id]?.reg_number || 'N/A'
     }));
-
     res.json({ success: true, data: enriched });
   } catch (error) {
     console.error('Error fetching reports:', error);
@@ -3394,32 +2200,18 @@ app.get('/api/teacher/reports', authenticateToken, async (req, res) => {
 app.post('/api/teacher/reports', authenticateToken, async (req, res) => {
   try {
     const { learnerId, term, form, subjects, comment, assessment_type_id, academic_year } = req.body;
-    
     console.log('📝 Creating new report for learner:', learnerId);
-    
-    if (!learnerId || !subjects || subjects.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Learner ID and subjects are required'
-      });
-    }
-    
+    if (!learnerId || !subjects || subjects.length === 0) return res.status(400).json({ success: false, message: 'Learner ID and subjects are required' });
     const { data: learner, error: learnerError } = await supabase
       .from('learners')
       .select('id, name, class_id, reg_number, form')
       .eq('id', parseInt(learnerId))
       .maybeSingle();
-    
     if (learnerError || !learner) {
       console.error('Learner error:', learnerError);
-      return res.status(404).json({
-        success: false,
-        message: 'Learner not found'
-      });
+      return res.status(404).json({ success: false, message: 'Learner not found' });
     }
-    
     console.log('Found learner:', learner.name, 'Class ID:', learner.class_id);
-    
     let assessmentName = term;
     if (assessment_type_id) {
       const { data: assessmentType, error: typeError } = await supabase
@@ -3427,26 +2219,16 @@ app.post('/api/teacher/reports', authenticateToken, async (req, res) => {
         .select('name')
         .eq('id', assessment_type_id)
         .maybeSingle();
-      
-      if (!typeError && assessmentType) {
-        assessmentName = assessmentType.name;
-      }
+      if (!typeError && assessmentType) assessmentName = assessmentType.name;
     }
-    
     const totalScore = subjects.reduce((sum, s) => sum + (s.score || 0), 0);
     const averageScore = Math.round(totalScore / subjects.length);
-    
     let grade = 'F';
     if (averageScore >= 75) grade = 'A';
     else if (averageScore >= 65) grade = 'B';
     else if (averageScore >= 55) grade = 'C';
     else if (averageScore >= 40) grade = 'D';
-    
-    const subjectsData = subjects.map(s => ({
-      name: s.name,
-      score: parseInt(s.score) || 0
-    }));
-    
+    const subjectsData = subjects.map(s => ({ name: s.name, score: parseInt(s.score) || 0 }));
     const { data: newReport, error } = await supabase
       .from('reports')
       .insert({
@@ -3468,29 +2250,15 @@ app.post('/api/teacher/reports', authenticateToken, async (req, res) => {
       })
       .select()
       .single();
-    
     if (error) {
       console.error('Insert error:', error);
-      return res.status(500).json({
-        success: false,
-        message: 'Failed to save report: ' + error.message
-      });
+      return res.status(500).json({ success: false, message: 'Failed to save report: ' + error.message });
     }
-    
     console.log('✅ Report saved successfully:', newReport.id);
-    
-    res.json({
-      success: true,
-      message: 'Report card saved successfully!',
-      report: newReport
-    });
-    
+    res.json({ success: true, message: 'Report card saved successfully!', report: newReport });
   } catch (err) {
     console.error('Error creating report:', err);
-    res.status(500).json({
-      success: false,
-      message: 'Database error: ' + err.message
-    });
+    res.status(500).json({ success: false, message: 'Database error: ' + err.message });
   }
 });
 
@@ -3498,59 +2266,24 @@ app.post('/api/teacher/reports', authenticateToken, async (req, res) => {
 app.put('/api/teacher/reports/:id', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
-    const {
-      learnerId,
-      term,
-      form,
-      subjects,
-      best_subjects,
-      total_points,
-      english_passed,
-      final_status,
-      comment,
-      assessment_type_id,
-      academic_year
-    } = req.body;
-
+    const { learnerId, term, form, subjects, best_subjects, total_points, english_passed, final_status, comment, assessment_type_id, academic_year } = req.body;
     console.log(`✏️ Updating report ${id} for teacher ${req.user.id}`);
-
-    // First, verify the report exists and belongs to this teacher's class
     const { data: existing, error: fetchError } = await supabase
       .from('reports')
       .select('id, learner_id, class_id')
       .eq('id', id)
       .maybeSingle();
-
     if (fetchError || !existing) {
       console.error('Report not found or fetch error:', fetchError);
-      return res.status(404).json({
-        success: false,
-        message: 'Report not found'
-      });
+      return res.status(404).json({ success: false, message: 'Report not found' });
     }
-
-    // Verify teacher has access to this learner's class
     const { data: teacher, error: teacherError } = await supabase
       .from('users')
       .select('class_id')
       .eq('id', req.user.id)
       .maybeSingle();
-
-    if (teacherError || !teacher) {
-      return res.status(403).json({
-        success: false,
-        message: 'Teacher not found'
-      });
-    }
-
-    if (teacher.class_id !== existing.class_id) {
-      return res.status(403).json({
-        success: false,
-        message: 'You do not have permission to edit this report'
-      });
-    }
-
-    // Build update object
+    if (teacherError || !teacher) return res.status(403).json({ success: false, message: 'Teacher not found' });
+    if (teacher.class_id !== existing.class_id) return res.status(403).json({ success: false, message: 'You do not have permission to edit this report' });
     const updates = {};
     if (learnerId !== undefined) updates.learner_id = parseInt(learnerId);
     if (term !== undefined) updates.term = term;
@@ -3564,14 +2297,11 @@ app.put('/api/teacher/reports/:id', authenticateToken, async (req, res) => {
     if (assessment_type_id !== undefined) updates.assessment_type_id = assessment_type_id;
     if (academic_year !== undefined) updates.academic_year = academic_year;
     updates.updated_at = new Date().toISOString();
-
-    // Recalculate average and grade if subjects changed
     if (subjects && Array.isArray(subjects) && subjects.length > 0) {
       const totalScore = subjects.reduce((sum, s) => sum + (s.score || 0), 0);
       const averageScore = Math.round(totalScore / subjects.length);
       updates.average_score = averageScore;
       updates.total_score = totalScore;
-
       let grade = 'F';
       if (averageScore >= 75) grade = 'A';
       else if (averageScore >= 65) grade = 'B';
@@ -3579,147 +2309,85 @@ app.put('/api/teacher/reports/:id', authenticateToken, async (req, res) => {
       else if (averageScore >= 40) grade = 'D';
       updates.grade = grade;
     }
-
-    // Perform the update
     const { data: updatedReport, error: updateError } = await supabase
       .from('reports')
       .update(updates)
       .eq('id', id)
       .select()
       .single();
-
     if (updateError) {
       console.error('Update error:', updateError);
-      return res.status(500).json({
-        success: false,
-        message: 'Failed to update report: ' + updateError.message
-      });
+      return res.status(500).json({ success: false, message: 'Failed to update report: ' + updateError.message });
     }
-
     console.log('✅ Report updated successfully:', updatedReport.id);
-
-    res.json({
-      success: true,
-      message: 'Report updated successfully',
-      report: updatedReport
-    });
+    res.json({ success: true, message: 'Report updated successfully', report: updatedReport });
   } catch (err) {
     console.error('Error updating report:', err);
-    res.status(500).json({
-      success: false,
-      message: 'Server error: ' + err.message
-    });
+    res.status(500).json({ success: false, message: 'Server error: ' + err.message });
   }
 });
 
 app.delete('/api/teacher/reports/:reportId', authenticateToken, async (req, res) => {
   try {
     const { reportId } = req.params;
-    
     const { data: deletedReport, error } = await supabase
       .from('reports')
       .delete()
       .eq('id', reportId)
       .select()
       .single();
-    
     if (error) {
-      if (error.code === 'PGRST116') {
-        return res.status(404).json({
-          success: false,
-          message: 'Report not found'
-        });
-      }
+      if (error.code === 'PGRST116') return res.status(404).json({ success: false, message: 'Report not found' });
       throw error;
     }
-    
-    res.json({
-      success: true,
-      message: 'Report deleted successfully'
-    });
-    
+    res.json({ success: true, message: 'Report deleted successfully' });
   } catch (err) {
     console.error('Error deleting report:', err);
-    res.status(500).json({
-      success: false,
-      message: 'Database error: ' + err.message
-    });
+    res.status(500).json({ success: false, message: 'Database error: ' + err.message });
   }
 });
 
 app.get('/api/teacher/attendance', authenticateToken, async (req, res) => {
   try {
     console.log('📅 Fetching attendance records for teacher:', req.user.id);
-    
     const { data: teacher, error: teacherError } = await supabase
       .from('users')
       .select('class_id')
       .eq('id', req.user.id)
       .maybeSingle();
-    
     if (teacherError) {
       console.error('Teacher error:', teacherError);
-      return res.json({
-        success: true,
-        data: {
-          stats: { total: 0, present: 0, absent: 0, late: 0, rate: 0 },
-          records: []
-        }
-      });
+      return res.json({ success: true, data: { stats: { total: 0, present: 0, absent: 0, late: 0, rate: 0 }, records: [] } });
     }
-    
     if (!teacher?.class_id) {
       console.log('Teacher has no class assigned');
-      return res.json({
-        success: true,
-        data: {
-          stats: { total: 0, present: 0, absent: 0, late: 0, rate: 0 },
-          records: []
-        }
-      });
+      return res.json({ success: true, data: { stats: { total: 0, present: 0, absent: 0, late: 0, rate: 0 }, records: [] } });
     }
-    
     const { data: learners, error: learnersError } = await supabase
       .from('learners')
       .select('id, name, reg_number, form')
       .eq('class_id', teacher.class_id);
-    
     if (learnersError) {
       console.error('Learners error:', learnersError);
-      return res.json({
-        success: true,
-        data: {
-          stats: { total: 0, present: 0, absent: 0, late: 0, rate: 0 },
-          records: []
-        }
-      });
+      return res.json({ success: true, data: { stats: { total: 0, present: 0, absent: 0, late: 0, rate: 0 }, records: [] } });
     }
-    
     const learnerIds = learners?.map(l => l.id) || [];
-    
     let attendanceData = [];
     let stats = { total: 0, present: 0, absent: 0, late: 0, rate: 0 };
-    
     if (learnerIds.length > 0) {
       const { data: attendance, error: attendanceError } = await supabase
         .from('attendance')
         .select('*')
         .in('learner_id', learnerIds)
         .order('date', { ascending: false });
-      
       if (!attendanceError && attendance) {
         attendanceData = attendance;
-        
         const learnerMap = {};
-        learners.forEach(l => {
-          learnerMap[l.id] = { name: l.name, reg_number: l.reg_number, form: l.form };
-        });
-        
+        learners.forEach(l => { learnerMap[l.id] = { name: l.name, reg_number: l.reg_number, form: l.form }; });
         const totalRecords = attendanceData.length;
         const presentCount = attendanceData.filter(a => a.status === 'present').length;
         const absentCount = attendanceData.filter(a => a.status === 'absent').length;
         const lateCount = attendanceData.filter(a => a.status === 'late').length;
-        
         stats = {
           total: totalRecords,
           present: presentCount,
@@ -3727,7 +2395,6 @@ app.get('/api/teacher/attendance', authenticateToken, async (req, res) => {
           late: lateCount,
           rate: totalRecords > 0 ? Math.round(((presentCount + lateCount) / totalRecords) * 100) : 0
         };
-        
         attendanceData = attendanceData.map(record => ({
           id: record.id,
           learner_id: record.learner_id,
@@ -3736,158 +2403,74 @@ app.get('/api/teacher/attendance', authenticateToken, async (req, res) => {
           learner_form: learnerMap[record.learner_id]?.form || 'N/A',
           date: record.date,
           status: record.status,
-          status_display: record.status === 'present' ? 'Present' : 
-                         record.status === 'late' ? 'Late' : 'Absent',
+          status_display: record.status === 'present' ? 'Present' : record.status === 'late' ? 'Late' : 'Absent',
           term: record.term || 1,
           year: record.year || new Date().getFullYear(),
           recorded_at: record.created_at || record.updated_at,
-          date_formatted: new Date(record.date).toLocaleDateString('en', {
-            weekday: 'long',
-            year: 'numeric',
-            month: 'long',
-            day: 'numeric'
-          })
+          date_formatted: new Date(record.date).toLocaleDateString('en', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
         }));
       }
     }
-    
-    res.json({
-      success: true,
-      data: {
-        stats,
-        records: attendanceData,
-        summary: {
-          total_learners: learners.length,
-          total_records: stats.total,
-          present_rate: stats.rate
-        }
-      }
-    });
-    
+    res.json({ success: true, data: { stats, records: attendanceData, summary: { total_learners: learners.length, total_records: stats.total, present_rate: stats.rate } } });
   } catch (err) {
     console.error('Error fetching teacher attendance:', err);
-    res.status(500).json({
-      success: false,
-      message: 'Database error: ' + err.message
-    });
+    res.status(500).json({ success: false, message: 'Database error: ' + err.message });
   }
 });
 
 app.post('/api/teacher/attendance', authenticateToken, async (req, res) => {
   try {
     const { learnerId, date, status, term, year } = req.body;
-    
     console.log('📝 Attendance request:', { learnerId, date, status, term, year });
-    
-    if (!learnerId || !date || !status) {
-      return res.status(400).json({ 
-        success: false,
-        message: 'Missing required fields: learnerId, date, and status are required'
-      });
-    }
-    
-    if (!['present', 'absent', 'late'].includes(status)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid status. Must be present, absent, or late'
-      });
-    }
-    
+    if (!learnerId || !date || !status) return res.status(400).json({ success: false, message: 'Missing required fields: learnerId, date, and status are required' });
+    if (!['present', 'absent', 'late'].includes(status)) return res.status(400).json({ success: false, message: 'Invalid status. Must be present, absent, or late' });
     const { data: learner, error: learnerError } = await supabase
       .from('learners')
       .select('id, name')
       .eq('id', learnerId)
       .maybeSingle();
-    
     if (learnerError) {
       console.error('Learner query error:', learnerError);
-      return res.status(500).json({ 
-        success: false,
-        message: 'Database error while checking learner',
-        error: learnerError.message
-      });
+      return res.status(500).json({ success: false, message: 'Database error while checking learner', error: learnerError.message });
     }
-    
-    if (!learner) {
-      return res.status(404).json({
-        success: false,
-        message: `Learner with ID ${learnerId} not found`
-      });
-    }
-    
+    if (!learner) return res.status(404).json({ success: false, message: `Learner with ID ${learnerId} not found` });
     console.log('✅ Found learner:', learner);
-    
     const { data: existing, error: existingError } = await supabase
       .from('attendance')
       .select('id')
       .eq('learner_id', learnerId)
       .eq('date', date)
       .maybeSingle();
-    
     let result;
-    
     if (existing) {
       console.log('Updating existing attendance record');
       const { data, error } = await supabase
         .from('attendance')
-        .update({
-          status: status,
-          term: term || 1,
-          year: year || new Date().getFullYear(),
-          updated_at: new Date().toISOString()
-        })
+        .update({ status: status, term: term || 1, year: year || new Date().getFullYear(), updated_at: new Date().toISOString() })
         .eq('id', existing.id)
         .select();
-      
       if (error) {
         console.error('Update error:', error);
-        return res.status(500).json({
-          success: false,
-          message: 'Failed to update attendance: ' + error.message
-        });
+        return res.status(500).json({ success: false, message: 'Failed to update attendance: ' + error.message });
       }
-      
       result = data[0];
     } else {
       console.log('Creating new attendance record');
       const { data, error } = await supabase
         .from('attendance')
-        .insert({
-          learner_id: learnerId,
-          date: date,
-          status: status,
-          term: term || 1,
-          year: year || new Date().getFullYear(),
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString()
-        })
+        .insert({ learner_id: learnerId, date: date, status: status, term: term || 1, year: year || new Date().getFullYear(), created_at: new Date().toISOString(), updated_at: new Date().toISOString() })
         .select();
-      
       if (error) {
         console.error('Insert error:', error);
-        return res.status(500).json({
-          success: false,
-          message: 'Failed to record attendance: ' + error.message
-        });
+        return res.status(500).json({ success: false, message: 'Failed to record attendance: ' + error.message });
       }
-      
       result = data[0];
     }
-    
     console.log('✅ Attendance recorded successfully:', result);
-    
-    res.json({ 
-      success: true, 
-      message: 'Attendance recorded successfully',
-      attendance: result 
-    });
-    
+    res.json({ success: true, message: 'Attendance recorded successfully', attendance: result });
   } catch (error) {
     console.error('❌ Attendance error:', error);
-    res.status(500).json({ 
-      success: false,
-      message: 'Server error: ' + error.message
-    });
+    res.status(500).json({ success: false, message: 'Server error: ' + error.message });
   }
 });
 
@@ -3898,32 +2481,22 @@ app.get('/api/teacher/assessment-types', authenticateToken, async (req, res) => 
       .select('*')
       .eq('is_active', true)
       .order('display_order', { ascending: true });
-    
     if (error) throw error;
-    
-    res.json({
-      success: true,
-      assessment_types: types || []
-    });
+    res.json({ success: true, assessment_types: types || [] });
   } catch (err) {
     console.error('Error fetching assessment types:', err);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch assessment types'
-    });
+    res.status(500).json({ success: false, message: 'Failed to fetch assessment types' });
   }
 });
 
 app.get('/api/teacher/subjects/:classId', authenticateToken, async (req, res) => {
   try {
     const { classId } = req.params;
-    
     const { data, error } = await supabase
       .from('subjects')
       .select('*')
       .eq('class_id', classId)
       .order('display_order', { ascending: true });
-    
     if (error) throw error;
     res.json(data || []);
   } catch (error) {
@@ -3935,67 +2508,36 @@ app.get('/api/teacher/subjects/:classId', authenticateToken, async (req, res) =>
 app.get('/api/teacher/learner-subjects/:learnerId', authenticateToken, async (req, res) => {
   try {
     const { learnerId } = req.params;
-    
     console.log('📚 Fetching subjects for learner:', learnerId);
-    
     const { data: learner, error: learnerError } = await supabase
       .from('learners')
       .select('class_id, form')
       .eq('id', learnerId)
       .maybeSingle();
-    
     if (learnerError) {
       console.error('Error fetching learner:', learnerError);
-      return res.status(500).json({
-        success: false,
-        message: 'Error fetching learner information'
-      });
+      return res.status(500).json({ success: false, message: 'Error fetching learner information' });
     }
-    
-    if (!learner) {
-      return res.status(404).json({
-        success: false,
-        message: 'Learner not found'
-      });
-    }
-    
+    if (!learner) return res.status(404).json({ success: false, message: 'Learner not found' });
     if (!learner.class_id) {
       console.log('Learner has no class assigned');
-      return res.json({
-        success: true,
-        subjects: [],
-        message: 'Learner has no class assigned'
-      });
+      return res.json({ success: true, subjects: [], message: 'Learner has no class assigned' });
     }
-    
     const { data: subjects, error: subjectsError } = await supabase
       .from('subjects')
       .select('id, name, code, description, status')
       .eq('class_id', learner.class_id)
       .eq('status', 'Active')
       .order('display_order', { ascending: true });
-    
     if (subjectsError) {
       console.error('Error fetching subjects:', subjectsError);
-      return res.status(500).json({
-        success: false,
-        message: 'Error fetching subjects'
-      });
+      return res.status(500).json({ success: false, message: 'Error fetching subjects' });
     }
-    
     console.log(`✅ Found ${subjects?.length || 0} subjects for learner ${learnerId}`);
-    
-    res.json({
-      success: true,
-      subjects: subjects || []
-    });
-    
+    res.json({ success: true, subjects: subjects || [] });
   } catch (err) {
     console.error('Error in learner-subjects endpoint:', err);
-    res.status(500).json({
-      success: false,
-      message: 'Server error: ' + err.message
-    });
+    res.status(500).json({ success: false, message: 'Server error: ' + err.message });
   }
 });
 
@@ -4009,13 +2551,8 @@ app.get('/api/learner/profile', authenticateToken, async (req, res) => {
       .select('*, class:class_id(id, name, year)')
       .eq('id', req.user.id)
       .single();
-    
     if (error) throw error;
-    
-    res.json({
-      success: true,
-      profile: data
-    });
+    res.json({ success: true, profile: data });
   } catch (error) {
     console.error('Error fetching profile:', error);
     res.status(500).json({ error: error.message });
@@ -4025,53 +2562,32 @@ app.get('/api/learner/profile', authenticateToken, async (req, res) => {
 app.get('/api/learner/attendance', authenticateToken, async (req, res) => {
   try {
     console.log(`📅 Fetching attendance for learner: ${req.user.id}`);
-    
     const { data: learner, error: learnerError } = await supabase
       .from('learners')
       .select('id, name, reg_number, form, class_id')
       .eq('id', parseInt(req.user.id))
       .maybeSingle();
-    
     if (learnerError || !learner) {
       console.error('Learner not found:', req.user.id);
-      return res.json({
-        success: true,
-        data: {
-          stats: { total: 0, present: 0, absent: 0, late: 0, rate: 0 },
-          records: []
-        }
-      });
+      return res.json({ success: true, data: { stats: { total: 0, present: 0, absent: 0, late: 0, rate: 0 }, records: [] } });
     }
-    
     console.log('Found learner:', learner.name);
-    
     const { data: attendance, error } = await supabase
       .from('attendance')
       .select('*')
       .eq('learner_id', parseInt(req.user.id))
       .order('date', { ascending: false });
-    
     if (error) {
       console.error('Error fetching attendance:', error);
-      return res.json({
-        success: true,
-        data: {
-          stats: { total: 0, present: 0, absent: 0, late: 0, rate: 0 },
-          records: []
-        }
-      });
+      return res.json({ success: true, data: { stats: { total: 0, present: 0, absent: 0, late: 0, rate: 0 }, records: [] } });
     }
-    
     console.log(`Found ${attendance?.length || 0} attendance records for learner`);
-    
     const totalRecords = attendance?.length || 0;
     const presentCount = attendance?.filter(a => a.status === 'present').length || 0;
     const absentCount = attendance?.filter(a => a.status === 'absent').length || 0;
     const lateCount = attendance?.filter(a => a.status === 'late').length || 0;
-    
     const attendedCount = presentCount + lateCount;
     const attendanceRate = totalRecords > 0 ? Math.round((attendedCount / totalRecords) * 100) : 0;
-    
     const formattedRecords = (attendance || []).map(record => ({
       id: record.id,
       learner_id: record.learner_id,
@@ -4080,27 +2596,16 @@ app.get('/api/learner/attendance', authenticateToken, async (req, res) => {
       term: record.term || 1,
       year: record.year || new Date().getFullYear(),
       recorded_at: record.created_at || record.updated_at,
-      status_display: record.status === 'present' ? 'Present' : 
-                      record.status === 'late' ? 'Late' : 'Absent',
-      status_color: record.status === 'present' ? 'green' : 
-                    record.status === 'late' ? 'yellow' : 'red',
-      date_formatted: new Date(record.date).toLocaleDateString('en', {
-        weekday: 'long',
-        year: 'numeric',
-        month: 'long',
-        day: 'numeric'
-      })
+      status_display: record.status === 'present' ? 'Present' : record.status === 'late' ? 'Late' : 'Absent',
+      status_color: record.status === 'present' ? 'green' : record.status === 'late' ? 'yellow' : 'red',
+      date_formatted: new Date(record.date).toLocaleDateString('en', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
     }));
-    
     const recordsByTerm = {};
     formattedRecords.forEach(record => {
       const termKey = `Term ${record.term} ${record.year}`;
-      if (!recordsByTerm[termKey]) {
-        recordsByTerm[termKey] = [];
-      }
+      if (!recordsByTerm[termKey]) recordsByTerm[termKey] = [];
       recordsByTerm[termKey].push(record);
     });
-    
     const stats = {
       total: totalRecords,
       present: presentCount,
@@ -4112,9 +2617,7 @@ app.get('/api/learner/attendance', authenticateToken, async (req, res) => {
       late_percentage: totalRecords > 0 ? Math.round((lateCount / totalRecords) * 100) : 0,
       absent_percentage: totalRecords > 0 ? Math.round((absentCount / totalRecords) * 100) : 0
     };
-    
     console.log('Attendance stats:', stats);
-    
     res.json({
       success: true,
       data: {
@@ -4130,14 +2633,9 @@ app.get('/api/learner/attendance', authenticateToken, async (req, res) => {
         }
       }
     });
-    
   } catch (error) {
     console.error('Error in learner attendance endpoint:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch attendance records',
-      error: error.message
-    });
+    res.status(500).json({ success: false, message: 'Failed to fetch attendance records', error: error.message });
   }
 });
 
@@ -4146,58 +2644,32 @@ app.get('/api/learner/attendance-stats', authenticateToken, async (req, res) => 
     const { term, year } = req.query;
     const currentYear = year || new Date().getFullYear();
     const currentTerm = term ? parseInt(term) : null;
-    
     console.log(`📊 Fetching attendance stats for learner: ${req.user.id}, Term: ${currentTerm}, Year: ${currentYear}`);
-    
     let query = supabase
       .from('attendance')
       .select('status, date, term, year')
       .eq('learner_id', parseInt(req.user.id));
-    
-    if (currentTerm) {
-      query = query.eq('term', currentTerm);
-    }
-    if (currentYear) {
-      query = query.eq('year', currentYear);
-    }
-    
+    if (currentTerm) query = query.eq('term', currentTerm);
+    if (currentYear) query = query.eq('year', currentYear);
     const { data: attendance, error } = await query.order('date', { ascending: false });
-    
     if (error) {
       console.error('Error fetching attendance stats:', error);
-      return res.json({
-        success: true,
-        data: {
-          percentage: 0,
-          present: 0,
-          absences: 0,
-          late: 0,
-          total: 0,
-          term: currentTerm || 'All',
-          year: currentYear
-        }
-      });
+      return res.json({ success: true, data: { percentage: 0, present: 0, absences: 0, late: 0, total: 0, term: currentTerm || 'All', year: currentYear } });
     }
-    
     const totalDays = attendance?.length || 0;
     const presentDays = attendance?.filter(a => a.status === 'present').length || 0;
     const lateDays = attendance?.filter(a => a.status === 'late').length || 0;
     const absentDays = attendance?.filter(a => a.status === 'absent').length || 0;
-    
     const attendedDays = presentDays + lateDays;
     const percentage = totalDays > 0 ? Math.round((attendedDays / totalDays) * 100) : 0;
-    
     const monthlyData = {};
     attendance?.forEach(record => {
       const date = new Date(record.date);
       const monthKey = date.toLocaleString('en', { month: 'long', year: 'numeric' });
-      if (!monthlyData[monthKey]) {
-        monthlyData[monthKey] = { present: 0, late: 0, absent: 0, total: 0 };
-      }
+      if (!monthlyData[monthKey]) monthlyData[monthKey] = { present: 0, late: 0, absent: 0, total: 0 };
       monthlyData[monthKey][record.status]++;
       monthlyData[monthKey].total++;
     });
-    
     res.json({
       success: true,
       data: {
@@ -4215,78 +2687,46 @@ app.get('/api/learner/attendance-stats', authenticateToken, async (req, res) => 
         absent_rate: totalDays > 0 ? Math.round((absentDays / totalDays) * 100) : 0
       }
     });
-    
   } catch (error) {
     console.error('Error fetching attendance stats:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch attendance stats',
-      error: error.message
-    });
+    res.status(500).json({ success: false, message: 'Failed to fetch attendance stats', error: error.message });
   }
 });
 
 app.get('/api/learner/reports', authenticateToken, async (req, res) => {
   try {
     console.log(`📊 Fetching reports for learner: ${req.user.id}`);
-    
     const { data: learner, error: learnerError } = await supabase
       .from('learners')
       .select('id, name, reg_number, form, class_id')
       .eq('id', req.user.id)
       .maybeSingle();
-    
     if (learnerError || !learner) {
       console.error('Learner not found:', req.user.id);
-      return res.json({
-        success: true,
-        data: [],
-        count: 0,
-        message: 'Learner profile not found'
-      });
+      return res.json({ success: true, data: [], count: 0, message: 'Learner profile not found' });
     }
-    
     console.log('Found learner:', learner.name, 'ID:', learner.id);
-    
     const { data: reports, error } = await supabase
       .from('reports')
       .select('*')
       .eq('learner_id', parseInt(req.user.id))
       .order('created_at', { ascending: false });
-    
     if (error) {
       console.error('Error fetching reports:', error);
-      return res.json({
-        success: true,
-        data: [],
-        count: 0,
-        message: 'Error fetching reports'
-      });
+      return res.json({ success: true, data: [], count: 0, message: 'Error fetching reports' });
     }
-    
     console.log(`Found ${reports?.length || 0} reports for learner ${learner.name}`);
-    
     const formattedReports = (reports || []).map(report => {
       let subjects = report.subjects;
       if (typeof subjects === 'string') {
-        try {
-          subjects = JSON.parse(subjects);
-        } catch (e) {
-          console.error('Failed to parse subjects JSON for report:', report.id, e);
-          subjects = [];
-        }
+        try { subjects = JSON.parse(subjects); } catch(e) { subjects = []; }
       }
-      
-      if (!Array.isArray(subjects)) {
-        subjects = [];
-      }
-      
+      if (!Array.isArray(subjects)) subjects = [];
       let averageScore = report.average_score;
       if (!averageScore && subjects.length > 0) {
         const totalScore = subjects.reduce((sum, subj) => sum + (subj.score || 0), 0);
         averageScore = Math.round(totalScore / subjects.length);
       }
-      
       let grade = report.grade;
       if (!grade && averageScore) {
         if (averageScore >= 75) grade = 'A';
@@ -4295,7 +2735,6 @@ app.get('/api/learner/reports', authenticateToken, async (req, res) => {
         else if (averageScore >= 40) grade = 'D';
         else grade = 'F';
       }
-      
       return {
         id: report.id,
         learner_id: report.learner_id,
@@ -4318,20 +2757,10 @@ app.get('/api/learner/reports', authenticateToken, async (req, res) => {
         updated_at: report.updated_at
       };
     });
-    
-    res.json({
-      success: true,
-      data: formattedReports,
-      count: formattedReports.length
-    });
-    
+    res.json({ success: true, data: formattedReports, count: formattedReports.length });
   } catch (error) {
     console.error('Error in learner reports endpoint:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch reports',
-      error: error.message
-    });
+    res.status(500).json({ success: false, message: 'Failed to fetch reports', error: error.message });
   }
 });
 
@@ -4340,7 +2769,6 @@ app.get('/api/learner/report-card', authenticateToken, async (req, res) => {
     const { term, year } = req.query;
     const currentYear = year || new Date().getFullYear();
     const currentTerm = term || 'Term 1';
-    
     let query = supabase
       .from('reports')
       .select(`
@@ -4349,34 +2777,13 @@ app.get('/api/learner/report-card', authenticateToken, async (req, res) => {
       `)
       .eq('learner_id', req.user.id)
       .eq('year', currentYear);
-    
-    if (currentTerm !== 'all') {
-      query = query.eq('term', currentTerm);
-    }
-    
+    if (currentTerm !== 'all') query = query.eq('term', currentTerm);
     const { data: reports, error } = await query.order('subject_id');
-    
     if (error) {
-      return res.json({
-        success: true,
-        data: {
-          term: currentTerm,
-          year: currentYear,
-          reports: [],
-          summary: {
-            total_subjects: 0,
-            average_score: 0,
-            total_score: 0,
-            highest_score: 0,
-            lowest_score: 0
-          }
-        }
-      });
+      return res.json({ success: true, data: { term: currentTerm, year: currentYear, reports: [], summary: { total_subjects: 0, average_score: 0, total_score: 0, highest_score: 0, lowest_score: 0 } } });
     }
-    
     const totalScore = (reports || []).reduce((sum, r) => sum + (r.score || 0), 0);
     const averageScore = reports?.length > 0 ? Math.round(totalScore / reports.length) : 0;
-    
     res.json({
       success: true,
       data: {
@@ -4392,14 +2799,9 @@ app.get('/api/learner/report-card', authenticateToken, async (req, res) => {
         }
       }
     });
-    
   } catch (error) {
     console.error('Error fetching report card:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch report card',
-      error: error.message
-    });
+    res.status(500).json({ success: false, message: 'Failed to fetch report card', error: error.message });
   }
 });
 
@@ -4410,19 +2812,15 @@ app.get('/api/learner/dashboard/stats', authenticateToken, async (req, res) => {
       .select('status')
       .eq('learner_id', req.user.id)
       .eq('year', new Date().getFullYear());
-    
     const totalAttendance = attendance?.length || 0;
     const presentAttendance = attendance?.filter(a => a.status === 'present').length || 0;
     const attendanceRate = totalAttendance > 0 ? Math.round((presentAttendance / totalAttendance) * 100) : 0;
-    
     const { data: reports, error: reportsError } = await supabase
       .from('reports')
       .select('score')
       .eq('learner_id', req.user.id);
-    
     const totalScore = (reports || []).reduce((sum, r) => sum + (r.score || 0), 0);
     const averageScore = reports?.length > 0 ? Math.round(totalScore / reports.length) : 0;
-    
     res.json({
       success: true,
       data: {
@@ -4433,14 +2831,9 @@ app.get('/api/learner/dashboard/stats', authenticateToken, async (req, res) => {
         present_attendance: presentAttendance
       }
     });
-    
   } catch (error) {
     console.error('Error fetching dashboard stats:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch dashboard stats',
-      error: error.message
-    });
+    res.status(500).json({ success: false, message: 'Failed to fetch dashboard stats', error: error.message });
   }
 });
 
@@ -4450,50 +2843,32 @@ app.get('/api/learner/dashboard/stats', authenticateToken, async (req, res) => {
 const storage = multer.memoryStorage();
 const upload = multer({ 
   storage: storage,
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+  limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     const allowedTypes = /jpeg|jpg|png|gif|webp/;
     const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
     const mimetype = allowedTypes.test(file.mimetype);
-    
-    if (mimetype && extname) {
-      return cb(null, true);
-    } else {
-      cb(new Error('Only image files are allowed (JPEG, PNG, GIF, WEBP)'));
-    }
+    if (mimetype && extname) return cb(null, true);
+    else cb(new Error('Only image files are allowed (JPEG, PNG, GIF, WEBP)'));
   }
 });
-
 const uploadsDir = path.join(__dirname, 'uploads');
 fs.mkdir(uploadsDir, { recursive: true }).catch(console.error);
 
 app.post('/api/upload/image', authenticateToken, upload.single('image'), async (req, res) => {
   try {
-    if (!req.file) {
-      return res.status(400).json({ success: false, message: 'No image file provided' });
-    }
-
+    if (!req.file) return res.status(400).json({ success: false, message: 'No image file provided' });
     const fileExt = path.extname(req.file.originalname);
     const fileName = `${Date.now()}-${crypto.randomUUID()}${fileExt}`;
     const filePath = path.join(uploadsDir, fileName);
-
     await fs.writeFile(filePath, req.file.buffer);
-
     const protocol = req.protocol;
     const host = req.get('host');
     const imageUrl = `${protocol}://${host}/uploads/${fileName}`;
-
-    res.json({
-      success: true,
-      url: imageUrl,
-      message: 'Image uploaded successfully'
-    });
+    res.json({ success: true, url: imageUrl, message: 'Image uploaded successfully' });
   } catch (error) {
     console.error('Upload error:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: error.message || 'Failed to upload image'
-    });
+    res.status(500).json({ success: false, message: error.message || 'Failed to upload image' });
   }
 });
 
@@ -4505,15 +2880,12 @@ app.use('/uploads', express.static(uploadsDir));
 app.get('/api/teacher/debug-setup', authenticateToken, async (req, res) => {
   try {
     console.log('🔍 Debugging teacher setup for user:', req.user.id);
-    
     const { data: teacher, error: teacherError } = await supabase
       .from('users')
       .select('id, email, name, role, class_id')
       .eq('id', req.user.id)
       .maybeSingle();
-    
     if (teacherError) throw teacherError;
-    
     let classInfo = null;
     if (teacher?.class_id) {
       const { data: classData, error: classError } = await supabase
@@ -4523,16 +2895,13 @@ app.get('/api/teacher/debug-setup', authenticateToken, async (req, res) => {
         .maybeSingle();
       if (!classError) classInfo = classData;
     }
-    
     const { data: allClasses, error: classesError } = await supabase
       .from('classes')
       .select('id, name, year');
-    
     const { data: allTeachers, error: teachersError } = await supabase
       .from('users')
       .select('id, email, name, role, class_id')
       .eq('role', 'teacher');
-    
     let learnersInClass = [];
     if (teacher?.class_id) {
       const { data: learners, error: learnersError } = await supabase
@@ -4541,7 +2910,6 @@ app.get('/api/teacher/debug-setup', authenticateToken, async (req, res) => {
         .eq('class_id', teacher.class_id);
       if (!learnersError) learnersInClass = learners || [];
     }
-    
     res.json({
       success: true,
       current_teacher: {
@@ -4559,13 +2927,9 @@ app.get('/api/teacher/debug-setup', authenticateToken, async (req, res) => {
       all_teachers: allTeachers || [],
       recommendation: !teacher?.class_id ? 'Run SQL to assign teacher to a class' : null
     });
-    
   } catch (err) {
     console.error('Debug error:', err);
-    res.status(500).json({
-      success: false,
-      error: err.message
-    });
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
@@ -4575,14 +2939,8 @@ app.get('/api/debug/learners', async (req, res) => {
       .from('learners')
       .select('id, name, reg_number, form, status')
       .limit(10);
-    
     if (error) throw error;
-    
-    res.json({
-      success: true,
-      count: learners?.length || 0,
-      learners: learners
-    });
+    res.json({ success: true, count: learners?.length || 0, learners: learners });
   } catch (error) {
     res.json({ success: false, error: error.message });
   }
@@ -4593,10 +2951,7 @@ app.get('/api/debug/learners', async (req, res) => {
 // ============================================
 app.use((req, res) => {
   console.log(`❌ Route not found: ${req.method} ${req.path}`);
-  res.status(404).json({ 
-    success: false, 
-    message: `Route not found: ${req.path}`
-  });
+  res.status(404).json({ success: false, message: `Route not found: ${req.path}` });
 });
 
 // ============================================
@@ -4611,19 +2966,16 @@ app.use((err, req, res, next) => {
   });
 });
 
-
 // ============================================
 // START SERVER
 // ============================================
 const PORT = process.env.PORT || 3000;
-
 app.listen(PORT, () => {
   console.log('='.repeat(60));
   console.log(`✅ Server is running on port ${PORT}`);
   console.log(`📡 API URL: http://localhost:${PORT}/api`);
   console.log(`🏥 Health check: http://localhost:${PORT}/health`);
   console.log('='.repeat(60));
-  
   console.log('\n📋 Admin API Endpoints:');
   console.log('   GET    /api/admin/stats');
   console.log('   GET    /api/admin/teachers');
@@ -4652,7 +3004,6 @@ app.listen(PORT, () => {
   console.log('   POST   /api/admin/quizzes/:quizId/questions');
   console.log('   GET    /api/admin/quizzes/:quizId/submissions');
   console.log('   POST   /api/admin/grade');
-  
   console.log('\n📋 Teacher API Endpoints:');
   console.log('   GET    /api/teacher/dashboard/stats');
   console.log('   GET    /api/teacher/all-learners');
@@ -4669,7 +3020,6 @@ app.listen(PORT, () => {
   console.log('   GET    /api/teacher/learner-subjects/:learnerId');
   console.log('   GET    /api/teacher/assessment-types');
   console.log('   GET    /api/teacher/debug-setup');
-  
   console.log('\n📋 Learner API Endpoints:');
   console.log('   GET    /api/learner/profile');
   console.log('   GET    /api/learner/reports');
@@ -4677,7 +3027,6 @@ app.listen(PORT, () => {
   console.log('   GET    /api/learner/attendance');
   console.log('   GET    /api/learner/attendance-stats');
   console.log('   GET    /api/learner/dashboard/stats');
-  
   console.log('\n📋 Quiz API Endpoints:');
   console.log('   GET    /api/quiz/ping');
   console.log('   GET    /api/quiz/quizzes');
