@@ -159,6 +159,28 @@ const authenticateAdmin = async (req, res, next) => {
   next();
 };
 
+/**
+ * Quiz route param may be all-digit (integer PK) or UUID. Using parseInt() alone
+ * breaks UUIDs (NaN or wrong number) and causes 400s in load/start flows.
+ */
+function resolveQuizRouteId(quizIdParam) {
+  const raw = String(quizIdParam ?? '').trim();
+  if (!raw) {
+    return { ok: false, message: 'Invalid quiz ID format' };
+  }
+  if (/^\d+$/.test(raw)) {
+    return { ok: true, id: parseInt(raw, 10) };
+  }
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(raw)) {
+    return { ok: true, id: raw };
+  }
+  // CUID / KSUID / nanoid / etc. (quizzes.id may not be int or RFC UUID)
+  if (/^[a-zA-Z0-9_-]+$/.test(raw) && raw.length <= 128) {
+    return { ok: true, id: raw };
+  }
+  return { ok: false, message: 'Invalid quiz ID format' };
+}
+
 // Log admin action helper
 const logAdminAction = async (userId, action, details, ip = null) => {
   try {
@@ -2303,17 +2325,11 @@ app.get('/api/quiz/quizzes', authenticateToken, async (req, res) => {
 // Get quiz questions for learners
 app.get('/api/quiz/:quizId/questions', authenticateToken, async (req, res) => {
   try {
-    const { quizId } = req.params;
-    
-    // Convert to integer if your quizzes.id is integer
-    // If your quizzes.id is UUID, keep as string (but then your IDs must be UUIDs)
-    const numericQuizId = parseInt(quizId, 10);
-    if (isNaN(numericQuizId)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid quiz ID format'
-      });
+    const resolved = resolveQuizRouteId(req.params.quizId);
+    if (!resolved.ok) {
+      return res.status(400).json({ success: false, message: resolved.message });
     }
+    const numericQuizId = resolved.id;
 
     console.log(`📝 Fetching questions for quiz ID: ${numericQuizId}`);
 
@@ -2403,16 +2419,11 @@ app.get('/api/quiz/:quizId/questions', authenticateToken, async (req, res) => {
 // Start a quiz attempt
 app.post('/api/quiz/:quizId/start', authenticateToken, async (req, res) => {
   try {
-    const { quizId } = req.params;
-
-    // Validate and convert to integer
-    const numericQuizId = parseInt(quizId, 10);
-    if (isNaN(numericQuizId)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid quiz ID format (must be an integer)'
-      });
+    const resolved = resolveQuizRouteId(req.params.quizId);
+    if (!resolved.ok) {
+      return res.status(400).json({ success: false, message: resolved.message });
     }
+    const numericQuizId = resolved.id;
 
     console.log(`🎯 Starting quiz attempt for learner: ${req.user.id}, Quiz: ${numericQuizId}`);
 
@@ -2497,7 +2508,11 @@ app.post('/api/quiz/:quizId/start', authenticateToken, async (req, res) => {
 // Save answer during quiz (AUTO-SAVE)
 app.post('/api/quiz/:quizId/save-answer', authenticateToken, async (req, res) => {
   try {
-    const { quizId } = req.params;
+    const resolved = resolveQuizRouteId(req.params.quizId);
+    if (!resolved.ok) {
+      return res.status(400).json({ success: false, message: resolved.message });
+    }
+    const quizId = resolved.id;
     const { question_index, answer, attempt_id } = req.body;
     
     console.log(`💾 Saving answer for quiz: ${quizId}, Question: ${question_index}`);
@@ -2586,7 +2601,11 @@ app.post('/api/quiz/:quizId/save-answer', authenticateToken, async (req, res) =>
 // Submit quiz answers (updated to return marks_earned and total_marks)
 app.post('/api/quiz/:quizId/submit', authenticateToken, async (req, res) => {
   try {
-    const { quizId } = req.params;
+    const resolved = resolveQuizRouteId(req.params.quizId);
+    if (!resolved.ok) {
+      return res.status(400).json({ success: false, message: resolved.message });
+    }
+    const quizId = resolved.id;
     const { answers, time_taken, attempt_id } = req.body;
     const learnerId = req.user.id;
 
@@ -2951,10 +2970,15 @@ app.get('/api/quiz/history', authenticateToken, async (req, res) => {
 // Verify quiz access with registration number
 app.post('/api/quiz/:quizId/verify', authenticateToken, async (req, res) => {
   try {
-    const { quizId } = req.params;
     const { regNumber } = req.body;
+
+    const resolved = resolveQuizRouteId(req.params.quizId);
+    if (!resolved.ok) {
+      return res.status(400).json({ success: false, message: resolved.message });
+    }
+    const idForQuiz = resolved.id;
     
-    console.log(`🔐 Verifying quiz access for learner: ${req.user.id}, Quiz: ${quizId}`);
+    console.log(`🔐 Verifying quiz access for learner: ${req.user.id}, Quiz: ${idForQuiz}`);
     
     const { data: learner, error: learnerError } = await supabase
       .from('learners')
@@ -2963,7 +2987,7 @@ app.post('/api/quiz/:quizId/verify', authenticateToken, async (req, res) => {
       .single();
     
     if (learnerError || !learner) {
-      return res.status(404).json({
+      return res.status(422).json({
         success: false,
         message: 'Learner not found. Please login again.'
       });
@@ -2981,11 +3005,14 @@ app.post('/api/quiz/:quizId/verify', authenticateToken, async (req, res) => {
     const { data: quiz, error: quizError } = await supabase
       .from('quizzes')
       .select('id, title, is_active, duration, total_marks, target_form')
-      .eq('id', quizId)
+      .eq('id', idForQuiz)
       .single();
     
     if (quizError || !quiz) {
-      return res.status(404).json({
+      if (quizError) {
+        console.error('Verify quiz fetch error:', quizError.message, 'quizId=', idForQuiz);
+      }
+      return res.status(422).json({
         success: false,
         message: 'Quiz not found'
       });
