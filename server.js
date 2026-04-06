@@ -1723,23 +1723,19 @@ app.get('/api/admin/quizzes/:quizId/submissions', authenticateToken, authenticat
 
 app.post('/api/admin/grade', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
-    const { attempt_id, answers } = req.body;  // frontend sends attempt_id and answers
-
+    const { attempt_id, answers, overall_feedback } = req.body; // added overall_feedback
     if (!attempt_id) {
       return res.status(400).json({ success: false, message: 'Missing attempt_id' });
     }
-
     console.log(`📝 Grading attempt: ${attempt_id}`);
 
     // Fetch current attempt
     const { data: attempt, error: fetchError } = await supabase
       .from('quiz_attempts')
-      .select('answers, earned_points, total_points')
+      .select('answers, earned_points, total_points, status')
       .eq('id', attempt_id)
       .single();
-
-    if (fetchError) {
-      console.error('Error fetching attempt:', fetchError);
+    if (fetchError || !attempt) {
       return res.status(404).json({ success: false, message: 'Attempt not found' });
     }
 
@@ -1756,7 +1752,8 @@ app.post('/api/admin/grade', authenticateToken, authenticateAdmin, async (req, r
         return {
           ...ans,
           points_obtained: grade.marks_awarded,
-          feedback: grade.feedback || null
+          feedback: grade.feedback || null,
+          is_correct: grade.marks_awarded === ans.max_points // optional
         };
       }
       return ans;
@@ -1765,20 +1762,42 @@ app.post('/api/admin/grade', authenticateToken, authenticateAdmin, async (req, r
     // Recalculate total earned marks
     const newEarnedMarks = updatedAnswers.reduce((sum, ans) => sum + (ans.points_obtained || 0), 0);
     const totalMarks = attempt.total_points || 0;
+    const percentage = totalMarks > 0 ? (newEarnedMarks / totalMarks) * 100 : 0;
+    const passed = newEarnedMarks >= (totalMarks * 0.5); // assuming 50% passing
 
-    // Update the attempt
+    // Update attempt
+    const updateData = {
+      answers: updatedAnswers,
+      earned_points: newEarnedMarks,
+      percentage: percentage,
+      passed: passed,
+      status: 'completed',           // mark as graded
+      feedback: overall_feedback || null,
+      updated_at: new Date().toISOString()
+    };
     const { error: updateError } = await supabase
       .from('quiz_attempts')
-      .update({
-        answers: updatedAnswers,
-        earned_points: newEarnedMarks,
-        updated_at: new Date().toISOString()
-      })
+      .update(updateData)
       .eq('id', attempt_id);
 
-    if (updateError) {
-      console.error('Error updating attempt:', updateError);
-      return res.status(500).json({ success: false, message: updateError.message });
+    if (updateError) throw updateError;
+
+    // Optionally notify learner (create notification)
+    const { data: learner } = await supabase
+      .from('learners')
+      .select('id')
+      .eq('id', attempt.learner_id)
+      .single();
+    if (learner) {
+      await supabase.from('notifications').insert({
+        user_id: learner.id,
+        type: 'quiz_graded',
+        title: 'Quiz Graded',
+        message: `Your quiz attempt has been graded. Score: ${newEarnedMarks}/${totalMarks}`,
+        related_id: attempt_id,
+        is_read: false,
+        created_at: new Date().toISOString()
+      });
     }
 
     res.json({
