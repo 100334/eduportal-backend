@@ -1649,14 +1649,14 @@ app.get('/api/admin/quizzes/:quizId/submissions', authenticateToken, authenticat
     }
 
     const quizUuid = quiz.id;
-    console.log(`📋 Admin fetching submissions for quiz int_id=${numericId} (UUID=${quizUuid})`);
+    console.log(`📋 Admin fetching pending submissions for quiz int_id=${numericId} (UUID=${quizUuid})`);
 
-    // Step 2: Fetch all completed attempts for this quiz using the UUID
+    // Step 2: Fetch all submitted (pending) attempts for this quiz using the UUID
     const { data: attempts, error } = await supabase
       .from('quiz_attempts')
       .select('*')
       .eq('quiz_id', quizUuid)
-      .eq('status', 'completed')
+      .eq('status', 'submitted')   // Changed from 'completed' to 'submitted'
       .order('completed_at', { ascending: false });
 
     if (error) {
@@ -2582,7 +2582,6 @@ app.post('/api/quiz/:quizId/save-answer', authenticateToken, async (req, res) =>
   }
 });
 
-// Submit quiz answers (updated to return marks_earned and total_marks)
 app.post('/api/quiz/:quizId/submit', authenticateToken, async (req, res) => {
   try {
     const resolved = resolveQuizRouteId(req.params.quizId);
@@ -2610,7 +2609,7 @@ app.post('/api/quiz/:quizId/submit', authenticateToken, async (req, res) => {
       return res.status(404).json({ success: false, message: 'No active attempt found' });
     }
 
-    // Fetch quiz questions (needed only to store the answers structure, no grading)
+    // Fetch quiz questions (needed to store the answers structure)
     const { data: questions, error: qError } = await supabase
       .from('quiz_questions')
       .select('id, question_text, question_image, option_images, answer_image, question_type, marks, options, correct_answer, expected_answer, explanation')
@@ -2618,7 +2617,7 @@ app.post('/api/quiz/:quizId/submit', authenticateToken, async (req, res) => {
 
     if (qError) throw qError;
 
-    // Build answers array without calculating points
+    // Build answers array without grading
     const submittedAnswers = questions.map((question, idx) => {
       const userAnswer = answers && answers[idx] !== undefined ? answers[idx] : null;
       let userAnswerText = '';
@@ -2651,11 +2650,11 @@ app.post('/api/quiz/:quizId/submit', authenticateToken, async (req, res) => {
       };
     });
 
-    // Update attempt – mark as submitted, no automatic grading
+    // Update attempt – status = 'submitted' (pending admin review)
     const { error: updateError } = await supabase
       .from('quiz_attempts')
       .update({
-        status: 'submitted',       // new status: pending admin review
+        status: 'submitted',
         answers: submittedAnswers,
         time_taken: time_taken || null,
         completed_at: new Date().toISOString(),
@@ -2665,36 +2664,35 @@ app.post('/api/quiz/:quizId/submit', authenticateToken, async (req, res) => {
 
     if (updateError) throw updateError;
 
-    // Notify admins that a quiz needs grading (optional)
-    const { data: learner, error: learnerError } = await supabase
+    // (Optional) Notify admins
+    const { data: learner } = await supabase
       .from('learners')
       .select('name')
       .eq('id', learnerId)
       .single();
-    if (!learnerError && learner) {
-      const { data: quizTitle } = await supabase
-        .from('quizzes')
-        .select('title')
-        .eq('id', quizId)
-        .single();
-      if (quizTitle) {
-        const { data: admins } = await supabase
-          .from('users')
-          .select('id')
-          .eq('role', 'admin')
-          .eq('is_active', true);
-        if (admins && admins.length) {
-          const notifications = admins.map(admin => ({
-            user_id: admin.id,
-            type: 'quiz_pending',
-            title: 'Quiz Submitted for Grading',
-            message: `${learner.name} submitted "${quizTitle.title}" for grading.`,
-            related_id: attempt_id,
-            is_read: false,
-            created_at: new Date().toISOString()
-          }));
-          await supabase.from('notifications').insert(notifications);
-        }
+    const { data: quizTitle } = await supabase
+      .from('quizzes')
+      .select('title')
+      .eq('id', quizId)
+      .single();
+
+    if (learner && quizTitle) {
+      const { data: admins } = await supabase
+        .from('users')
+        .select('id')
+        .eq('role', 'admin')
+        .eq('is_active', true);
+      if (admins && admins.length) {
+        const notifications = admins.map(admin => ({
+          user_id: admin.id,
+          type: 'quiz_pending',
+          title: 'Quiz Submitted for Grading',
+          message: `${learner.name} submitted "${quizTitle.title}" for grading.`,
+          related_id: attempt_id,
+          is_read: false,
+          created_at: new Date().toISOString()
+        }));
+        await supabase.from('notifications').insert(notifications);
       }
     }
 
