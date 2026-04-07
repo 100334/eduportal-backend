@@ -4665,7 +4665,6 @@ app.post('/api/admin/upload-lesson-file', authenticateToken, authenticateAdmin, 
     const fileBase64 = req.file.buffer.toString('base64');
     const dataUri = `data:${req.file.mimetype};base64,${fileBase64}`;
     
-    // Determine resource type based on mimetype
     let resourceType = 'auto';
     if (req.file.mimetype === 'application/pdf') {
       resourceType = 'raw';
@@ -4678,7 +4677,7 @@ app.post('/api/admin/upload-lesson-file', authenticateToken, authenticateAdmin, 
     const result = await cloudinary.uploader.upload(dataUri, {
       resource_type: resourceType,
       folder: 'eduportal/lessons',
-      access_mode: 'public',   // <-- add this
+      access_mode: 'public',
       public_id: `${Date.now()}_${path.parse(req.file.originalname).name}`
     });
     
