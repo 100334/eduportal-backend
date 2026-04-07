@@ -4677,7 +4677,9 @@ app.post('/api/admin/upload-lesson-file', authenticateToken, authenticateAdmin, 
     
     const result = await cloudinary.uploader.upload(dataUri, {
       resource_type: resourceType,
-      folder: 'eduportal/lessons'
+      folder: 'eduportal/lessons',
+      access_mode: 'public',   // <-- add this
+      public_id: `${Date.now()}_${path.parse(req.file.originalname).name}`
     });
     
     res.json({
