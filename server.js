@@ -3018,6 +3018,46 @@ app.post('/api/quiz/:quizId/verify', authenticateToken, async (req, res) => {
   }
 });
 
+// Get all lessons for learner (filtered by form)
+app.get('/api/learner/lessons', authenticateToken, async (req, res) => {
+  try {
+    const { data: learner, error: learnerError } = await supabase
+      .from('learners')
+      .select('form')
+      .eq('id', req.user.id)
+      .single();
+    if (learnerError) throw learnerError;
+    const learnerForm = learner.form;
+
+    let query = supabase.from('lessons').select('*');
+    if (learnerForm !== 'All') {
+      query = query.or(`target_form.eq.All,target_form.eq.${learnerForm}`);
+    }
+    const { data: lessons, error } = await query.order('display_order', { ascending: true });
+    if (error) throw error;
+    res.json({ success: true, lessons });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Get a single lesson with its quiz details (if any)
+app.get('/api/learner/lesson/:lessonId', authenticateToken, async (req, res) => {
+  try {
+    const { lessonId } = req.params;
+    const { data: lesson, error } = await supabase
+      .from('lessons')
+      .select('*, quiz:quiz_id(id, title, duration, question_count)')
+      .eq('id', lessonId)
+      .single();
+    if (error) throw error;
+    res.json({ success: true, lesson });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
 // ============================================
 // TEACHER ROUTES
 // ============================================
