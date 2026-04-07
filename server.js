@@ -3018,46 +3018,90 @@ app.post('/api/quiz/:quizId/verify', authenticateToken, async (req, res) => {
   }
 });
 
-// Get all lessons for learner (filtered by form)
-app.get('/api/learner/lessons', authenticateToken, async (req, res) => {
-  try {
-    const { data: learner, error: learnerError } = await supabase
-      .from('learners')
-      .select('form')
-      .eq('id', req.user.id)
-      .single();
-    if (learnerError) throw learnerError;
-    const learnerForm = learner.form;
+// ============================================
+// LESSON MANAGEMENT ROUTES (ADMIN)
+// ============================================
 
-    let query = supabase.from('lessons').select('*');
-    if (learnerForm !== 'All') {
-      query = query.or(`target_form.eq.All,target_form.eq.${learnerForm}`);
-    }
-    const { data: lessons, error } = await query.order('display_order', { ascending: true });
+// GET all subjects (for admin dropdown)
+app.get('/api/admin/subjects/all', authenticateToken, authenticateAdmin, async (req, res) => {
+  try {
+    const { data: subjects, error } = await supabase
+      .from('subjects')
+      .select('id, name')
+      .order('name');
     if (error) throw error;
-    res.json({ success: true, lessons });
+    res.json({ success: true, subjects: subjects || [] });
   } catch (error) {
-    console.error(error);
     res.status(500).json({ success: false, message: error.message });
   }
 });
 
-// Get a single lesson with its quiz details (if any)
-app.get('/api/learner/lesson/:lessonId', authenticateToken, async (req, res) => {
+// GET all lessons (admin)
+app.get('/api/admin/lessons', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
-    const { lessonId } = req.params;
-    const { data: lesson, error } = await supabase
+    const { data: lessons, error } = await supabase
       .from('lessons')
-      .select('*, quiz:quiz_id(id, title, duration, question_count)')
-      .eq('id', lessonId)
-      .single();
+      .select('*, subject:subject_id(id, name), quiz:quiz_id(id, title)')
+      .order('display_order', { ascending: true });
     if (error) throw error;
-    res.json({ success: true, lesson });
+    res.json({ success: true, lessons: lessons || [] });
   } catch (error) {
-    console.error(error);
     res.status(500).json({ success: false, message: error.message });
   }
 });
+
+// CREATE lesson
+app.post('/api/admin/lessons', authenticateToken, authenticateAdmin, async (req, res) => {
+  try {
+    const { title, description, video_url, pdf_url, subject_id, target_form, quiz_id, display_order } = req.body;
+    if (!title) return res.status(400).json({ success: false, message: 'Title is required' });
+    const { data, error } = await supabase
+      .from('lessons')
+      .insert({
+        title, description, video_url, pdf_url, subject_id, target_form, quiz_id, display_order,
+        created_at: new Date(),
+        updated_at: new Date()
+      })
+      .select()
+      .single();
+    if (error) throw error;
+    res.json({ success: true, lesson: data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// UPDATE lesson
+app.put('/api/admin/lessons/:id', authenticateToken, authenticateAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const updates = req.body;
+    updates.updated_at = new Date();
+    const { data, error } = await supabase
+      .from('lessons')
+      .update(updates)
+      .eq('id', id)
+      .select()
+      .single();
+    if (error) throw error;
+    res.json({ success: true, lesson: data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// DELETE lesson
+app.delete('/api/admin/lessons/:id', authenticateToken, authenticateAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { error } = await supabase.from('lessons').delete().eq('id', id);
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 // ============================================
 // TEACHER ROUTES
 // ============================================
