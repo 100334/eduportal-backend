@@ -3035,7 +3035,6 @@ app.get('/api/admin/subjects/all', authenticateToken, authenticateAdmin, async (
     res.status(500).json({ success: false, message: error.message });
   }
 });
-
 // GET all lessons (admin)
 app.get('/api/admin/lessons', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
