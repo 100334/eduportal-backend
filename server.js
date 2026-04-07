@@ -3102,17 +3102,51 @@ app.post('/api/admin/lessons', authenticateToken, authenticateAdmin, async (req,
 app.put('/api/admin/lessons/:id', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
     const { id } = req.params;
-    const updates = req.body;
-    updates.updated_at = new Date();
+    let { title, description, video_url, pdf_url, subject_id, target_form, quiz_id, display_order } = req.body;
+    
+    if (!title) {
+      return res.status(400).json({ success: false, message: 'Title is required' });
+    }
+    
+    // Convert empty strings to null (Supabase expects null for UUID fields)
+    if (subject_id === '' || subject_id === 'null') subject_id = null;
+    if (quiz_id === '' || quiz_id === 'null') quiz_id = null;
+    
+    // Ensure display_order is a number
+    display_order = parseInt(display_order) || 0;
+    
+    const updates = {
+      title,
+      description,
+      video_url,
+      pdf_url,
+      subject_id,
+      target_form: target_form || 'All',
+      quiz_id,
+      display_order,
+      updated_at: new Date()
+    };
+    
     const { data, error } = await supabase
       .from('lessons')
       .update(updates)
       .eq('id', id)
       .select()
       .single();
-    if (error) throw error;
+      
+    if (error) {
+      console.error('Supabase update error:', error);
+      return res.status(500).json({ 
+        success: false, 
+        message: error.message,
+        details: error.details,
+        hint: error.hint
+      });
+    }
+    
     res.json({ success: true, lesson: data });
   } catch (error) {
+    console.error('Lesson update error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 });
