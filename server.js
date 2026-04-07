@@ -4548,7 +4548,7 @@ app.get('/api/learner/dashboard/stats', authenticateToken, async (req, res) => {
 });
 
 // ============================================
-// IMAGE UPLOAD ENDPOINT
+// IMAGE UPLOAD ENDPOINT (local storage)
 // ============================================
 const storage = multer.memoryStorage();
 const upload = multer({ 
@@ -4602,6 +4602,54 @@ app.post('/api/upload/image', authenticateToken, upload.single('image'), async (
 
 app.use('/uploads', express.static(uploadsDir));
 
+// ============================================
+// CLOUDINARY UPLOAD FOR LESSON FILES (videos, PDFs)
+// ============================================
+const cloudinary = require('cloudinary').v2;
+
+// Configure Cloudinary – add these to your .env file
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET
+});
+
+const lessonUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 100 * 1024 * 1024 }, // 100MB for videos
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = /mp4|webm|mov|pdf|jpeg|jpg|png|gif|webp/;
+    const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
+    const mimetype = allowedTypes.test(file.mimetype);
+    if (mimetype && extname) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only videos, PDFs, and images are allowed'));
+    }
+  }
+});
+
+app.post('/api/admin/upload-lesson-file', authenticateToken, authenticateAdmin, lessonUpload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: 'No file uploaded' });
+    }
+    const fileBase64 = req.file.buffer.toString('base64');
+    const dataUri = `data:${req.file.mimetype};base64,${fileBase64}`;
+    const result = await cloudinary.uploader.upload(dataUri, {
+      resource_type: 'auto',
+      folder: 'eduportal/lessons'
+    });
+    res.json({
+      success: true,
+      url: result.secure_url,
+      public_id: result.public_id
+    });
+  } catch (error) {
+    console.error('Cloudinary upload error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
 // ============================================
 // DEBUG AND MISC ENDPOINTS
 // ============================================
