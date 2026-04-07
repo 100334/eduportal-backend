@@ -4664,10 +4664,22 @@ app.post('/api/admin/upload-lesson-file', authenticateToken, authenticateAdmin, 
     }
     const fileBase64 = req.file.buffer.toString('base64');
     const dataUri = `data:${req.file.mimetype};base64,${fileBase64}`;
+    
+    // Determine resource type based on mimetype
+    let resourceType = 'auto';
+    if (req.file.mimetype === 'application/pdf') {
+      resourceType = 'raw';
+    } else if (req.file.mimetype.startsWith('video/')) {
+      resourceType = 'video';
+    } else if (req.file.mimetype.startsWith('image/')) {
+      resourceType = 'image';
+    }
+    
     const result = await cloudinary.uploader.upload(dataUri, {
-      resource_type: 'auto',
+      resource_type: resourceType,
       folder: 'eduportal/lessons'
     });
+    
     res.json({
       success: true,
       url: result.secure_url,
