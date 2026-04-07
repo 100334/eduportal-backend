@@ -3052,24 +3052,52 @@ app.get('/api/admin/lessons', authenticateToken, authenticateAdmin, async (req, 
 // CREATE lesson
 app.post('/api/admin/lessons', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
-    const { title, description, video_url, pdf_url, subject_id, target_form, quiz_id, display_order } = req.body;
-    if (!title) return res.status(400).json({ success: false, message: 'Title is required' });
+    let { title, description, video_url, pdf_url, subject_id, target_form, quiz_id, display_order } = req.body;
+    
+    if (!title) {
+      return res.status(400).json({ success: false, message: 'Title is required' });
+    }
+    
+    // Convert empty strings to null (Supabase expects null for optional UUID fields)
+    if (subject_id === '' || subject_id === 'null') subject_id = null;
+    if (quiz_id === '' || quiz_id === 'null') quiz_id = null;
+    
+    // Ensure display_order is a number
+    display_order = parseInt(display_order) || 0;
+    
     const { data, error } = await supabase
       .from('lessons')
       .insert({
-        title, description, video_url, pdf_url, subject_id, target_form, quiz_id, display_order,
+        title,
+        description,
+        video_url,
+        pdf_url,
+        subject_id,
+        target_form: target_form || 'All',
+        quiz_id,
+        display_order,
         created_at: new Date(),
         updated_at: new Date()
       })
       .select()
       .single();
-    if (error) throw error;
+      
+    if (error) {
+      console.error('Supabase insert error:', error);
+      return res.status(500).json({ 
+        success: false, 
+        message: error.message,
+        details: error.details,
+        hint: error.hint
+      });
+    }
+    
     res.json({ success: true, lesson: data });
   } catch (error) {
+    console.error('Lesson create error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 });
-
 // UPDATE lesson
 app.put('/api/admin/lessons/:id', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
