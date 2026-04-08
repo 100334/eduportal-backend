@@ -126,42 +126,7 @@ console.log('='.repeat(60));
 console.log('🚀 STARTING SERVER INITIALIZATION');
 console.log('='.repeat(60));
 
-// ============================================
-// CLOUDFLARE R2 UPLOAD (pre‑signed URL)
-// ============================================
-const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
-const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 
-const s3Client = new S3Client({
-  region: 'auto',
-  endpoint: `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
-  credentials: {
-    accessKeyId: process.env.R2_ACCESS_KEY_ID,
-    secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
-  },
-});
-
-app.post('/api/admin/r2-upload-url', authenticateToken, authenticateAdmin, async (req, res) => {
-  try {
-    const { filename, filetype } = req.body;
-    if (!filename) {
-      return res.status(400).json({ success: false, message: 'Filename required' });
-    }
-    const safeName = filename.replace(/[^a-zA-Z0-9._-]/g, '');
-    const key = `eduportal/lessons/${Date.now()}_${safeName}`;
-    const command = new PutObjectCommand({
-      Bucket: process.env.R2_BUCKET_NAME,
-      Key: key,
-      ContentType: filetype,
-    });
-    const uploadUrl = await getSignedUrl(s3Client, command, { expiresIn: 3600 });
-    const publicUrl = `${process.env.R2_PUBLIC_URL}/${key}`;
-    res.json({ success: true, uploadUrl, publicUrl, key });
-  } catch (error) {
-    console.error('R2 pre‑sign error:', error);
-    res.status(500).json({ success: false, message: error.message });
-  }
-});
 
 // ============================================
 // AUTHENTICATION MIDDLEWARE
@@ -249,6 +214,42 @@ function getFormName(className) {
   return 'Form 1';
 }
 
+// ============================================
+// CLOUDFLARE R2 UPLOAD (pre‑signed URL)
+// ============================================
+const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
+const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
+
+const s3Client = new S3Client({
+  region: 'auto',
+  endpoint: `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+  credentials: {
+    accessKeyId: process.env.R2_ACCESS_KEY_ID,
+    secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
+  },
+});
+
+app.post('/api/admin/r2-upload-url', authenticateToken, authenticateAdmin, async (req, res) => {
+  try {
+    const { filename, filetype } = req.body;
+    if (!filename) {
+      return res.status(400).json({ success: false, message: 'Filename required' });
+    }
+    const safeName = filename.replace(/[^a-zA-Z0-9._-]/g, '');
+    const key = `eduportal/lessons/${Date.now()}_${safeName}`;
+    const command = new PutObjectCommand({
+      Bucket: process.env.R2_BUCKET_NAME,
+      Key: key,
+      ContentType: filetype,
+    });
+    const uploadUrl = await getSignedUrl(s3Client, command, { expiresIn: 3600 });
+    const publicUrl = `${process.env.R2_PUBLIC_URL}/${key}`;
+    res.json({ success: true, uploadUrl, publicUrl, key });
+  } catch (error) {
+    console.error('R2 pre‑sign error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
 // ============================================
 // PUBLIC TEST ENDPOINTS
 // ============================================
