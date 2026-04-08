@@ -1943,6 +1943,8 @@ app.post('/api/admin/quizzes', authenticateToken, authenticateAdmin, async (req,
         description: description || null,
         duration: parseInt(duration) || 30,
         total_marks: parseInt(total_marks) || 0,
+        section_a_marks: parseInt(req.body.section_a_marks) || 75,   // NEW
+        section_b_marks: parseInt(req.body.section_b_marks) || 25,   // NEW
         is_active: is_active !== false,
         target_form: target_form || 'All',
         created_by: req.user.id,
@@ -2207,6 +2209,8 @@ app.put('/api/admin/quizzes/:quizId', authenticateToken, authenticateAdmin, asyn
     if (description !== undefined) updateData.description = description;
     if (duration) updateData.duration = duration;
     if (total_marks !== undefined) updateData.total_marks = total_marks;
+    if (req.body.section_a_marks !== undefined) updateData.section_a_marks = parseInt(req.body.section_a_marks);
+    if (req.body.section_b_marks !== undefined) updateData.section_b_marks = parseInt(req.body.section_b_marks);
     if (is_active !== undefined) updateData.is_active = is_active;
     if (target_form !== undefined) updateData.target_form = target_form;
     updateData.updated_at = new Date().toISOString();
