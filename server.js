@@ -126,8 +126,6 @@ console.log('='.repeat(60));
 console.log('🚀 STARTING SERVER INITIALIZATION');
 console.log('='.repeat(60));
 
-
-
 // ============================================
 // AUTHENTICATION MIDDLEWARE
 // ============================================
@@ -214,42 +212,6 @@ function getFormName(className) {
   return 'Form 1';
 }
 
-// ============================================
-// CLOUDFLARE R2 UPLOAD (pre‑signed URL)
-// ============================================
-const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
-const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
-
-const s3Client = new S3Client({
-  region: 'auto',
-  endpoint: `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
-  credentials: {
-    accessKeyId: process.env.R2_ACCESS_KEY_ID,
-    secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
-  },
-});
-
-app.post('/api/admin/r2-upload-url', authenticateToken, authenticateAdmin, async (req, res) => {
-  try {
-    const { filename, filetype } = req.body;
-    if (!filename) {
-      return res.status(400).json({ success: false, message: 'Filename required' });
-    }
-    const safeName = filename.replace(/[^a-zA-Z0-9._-]/g, '');
-    const key = `eduportal/lessons/${Date.now()}_${safeName}`;
-    const command = new PutObjectCommand({
-      Bucket: process.env.R2_BUCKET_NAME,
-      Key: key,
-      ContentType: filetype,
-    });
-    const uploadUrl = await getSignedUrl(s3Client, command, { expiresIn: 3600 });
-    const publicUrl = `${process.env.R2_PUBLIC_URL}/${key}`;
-    res.json({ success: true, uploadUrl, publicUrl, key });
-  } catch (error) {
-    console.error('R2 pre‑sign error:', error);
-    res.status(500).json({ success: false, message: error.message });
-  }
-});
 // ============================================
 // PUBLIC TEST ENDPOINTS
 // ============================================
@@ -3067,16 +3029,9 @@ app.get('/api/admin/subjects/all', authenticateToken, authenticateAdmin, async (
       .from('subjects')
       .select('id, name')
       .order('name');
-
     if (error) throw error;
-
-    // Check your server terminal! 
-    // If this says [], you have no data in the table or RLS is blocking you.
-    console.log("Subjects found in Supabase:", subjects);
-
     res.json({ success: true, subjects: subjects || [] });
   } catch (error) {
-    console.error("Fetch Error:", error.message);
     res.status(500).json({ success: false, message: error.message });
   }
 });
@@ -3147,51 +3102,17 @@ app.post('/api/admin/lessons', authenticateToken, authenticateAdmin, async (req,
 app.put('/api/admin/lessons/:id', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
     const { id } = req.params;
-    let { title, description, video_url, pdf_url, subject_id, target_form, quiz_id, display_order } = req.body;
-    
-    if (!title) {
-      return res.status(400).json({ success: false, message: 'Title is required' });
-    }
-    
-    // Convert empty strings to null (Supabase expects null for UUID fields)
-    if (subject_id === '' || subject_id === 'null') subject_id = null;
-    if (quiz_id === '' || quiz_id === 'null') quiz_id = null;
-    
-    // Ensure display_order is a number
-    display_order = parseInt(display_order) || 0;
-    
-    const updates = {
-      title,
-      description,
-      video_url,
-      pdf_url,
-      subject_id,
-      target_form: target_form || 'All',
-      quiz_id,
-      display_order,
-      updated_at: new Date()
-    };
-    
+    const updates = req.body;
+    updates.updated_at = new Date();
     const { data, error } = await supabase
       .from('lessons')
       .update(updates)
       .eq('id', id)
       .select()
       .single();
-      
-    if (error) {
-      console.error('Supabase update error:', error);
-      return res.status(500).json({ 
-        success: false, 
-        message: error.message,
-        details: error.details,
-        hint: error.hint
-      });
-    }
-    
+    if (error) throw error;
     res.json({ success: true, lesson: data });
   } catch (error) {
-    console.error('Lesson update error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 });
@@ -3249,6 +3170,37 @@ app.get('/api/learner/lesson/:lessonId', authenticateToken, async (req, res) => 
     res.json({ success: true, lesson });
   } catch (error) {
     console.error(error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// GET learner notifications
+app.get('/api/learner/notifications', authenticateToken, async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('notifications')
+      .select('*')
+      .eq('user_id', req.user.id)
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+    res.json({ success: true, notifications: data || [] });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Mark notification as read
+app.put('/api/learner/notifications/:id/read', authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { error } = await supabase
+      .from('notifications')
+      .update({ is_read: true, updated_at: new Date() })
+      .eq('id', id)
+      .eq('user_id', req.user.id);
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
 });
@@ -4744,6 +4696,7 @@ app.post('/api/admin/upload-lesson-file', authenticateToken, authenticateAdmin, 
     const fileBase64 = req.file.buffer.toString('base64');
     const dataUri = `data:${req.file.mimetype};base64,${fileBase64}`;
     
+    // Determine resource type based on mimetype
     let resourceType = 'auto';
     if (req.file.mimetype === 'application/pdf') {
       resourceType = 'raw';
@@ -4755,9 +4708,7 @@ app.post('/api/admin/upload-lesson-file', authenticateToken, authenticateAdmin, 
     
     const result = await cloudinary.uploader.upload(dataUri, {
       resource_type: resourceType,
-      folder: 'eduportal/lessons',
-      access_mode: 'public',
-      public_id: `${Date.now()}_${path.parse(req.file.originalname).name}`
+      folder: 'eduportal/lessons'
     });
     
     res.json({
