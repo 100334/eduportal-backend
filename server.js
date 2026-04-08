@@ -12,6 +12,18 @@ const fs = require('fs').promises;
 const crypto = require('crypto');
 const uploadRoutes = require('./routes/upload');
 
+// ============================================
+// DATABASE MIGRATION NOTES (run once)
+// ============================================
+/*
+-- Add columns to quizzes table
+ALTER TABLE quizzes ADD COLUMN IF NOT EXISTS exam_year INT DEFAULT 2026;
+ALTER TABLE quizzes ADD COLUMN IF NOT EXISTS exam_type VARCHAR(255) DEFAULT 'SCHOOL CERTIFICATE OF EDUCATION MOCK EXAMINATION';
+
+-- Add column to questions table (quiz_questions)
+ALTER TABLE quiz_questions ADD COLUMN IF NOT EXISTS section CHAR(1) DEFAULT 'A';
+*/
+
 // Load environment variables
 dotenv.config();
 
@@ -1901,12 +1913,15 @@ app.get('/api/admin/quizzes', authenticateToken, authenticateAdmin, async (req, 
   }
 });
 
-// Create a new quiz (admin)
+// Create a new quiz (admin) - UPDATED to accept exam_year and exam_type
 app.post('/api/admin/quizzes', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
-    const { subject_id, title, description, duration, total_marks, is_active, target_form } = req.body;
+    const { 
+      subject_id, title, description, duration, total_marks, is_active, target_form,
+      section_a_marks, section_b_marks, exam_year, exam_type 
+    } = req.body;
     
-    console.log('📝 Creating new quiz:', { subject_id, title, duration, target_form });
+    console.log('📝 Creating new quiz:', { subject_id, title, duration, target_form, exam_year, exam_type });
     
     if (!subject_id) {
       return res.status(400).json({ 
@@ -1943,10 +1958,12 @@ app.post('/api/admin/quizzes', authenticateToken, authenticateAdmin, async (req,
         description: description || null,
         duration: parseInt(duration) || 30,
         total_marks: parseInt(total_marks) || 0,
-        section_a_marks: parseInt(req.body.section_a_marks) || 75,   // NEW
-        section_b_marks: parseInt(req.body.section_b_marks) || 25,   // NEW
+        section_a_marks: parseInt(section_a_marks) || 75,
+        section_b_marks: parseInt(section_b_marks) || 25,
         is_active: is_active !== false,
         target_form: target_form || 'All',
+        exam_year: exam_year || new Date().getFullYear(),
+        exam_type: exam_type || 'SCHOOL CERTIFICATE OF EDUCATION MOCK EXAMINATION',
         created_by: req.user.id,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString()
@@ -1989,7 +2006,7 @@ app.post('/api/admin/quizzes', authenticateToken, authenticateAdmin, async (req,
   }
 });
 
-// Get questions for a specific quiz (admin)
+// Get questions for a specific quiz (admin) - now returns section
 app.get('/api/admin/quizzes/:quizId/questions', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
     const { quizId } = req.params;
@@ -2037,6 +2054,7 @@ app.get('/api/admin/quizzes/:quizId/questions', authenticateToken, authenticateA
   }
 });
 
+// Add a new question to a quiz (admin) - UPDATED to include section
 app.post('/api/admin/quizzes/:quizId/questions', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
     const { quizId } = req.params;
@@ -2049,12 +2067,13 @@ app.post('/api/admin/quizzes/:quizId/questions', authenticateToken, authenticate
       display_order, 
       question_type, 
       expected_answer,
-      question_image,        // <-- NEW
-      option_images,         // <-- NEW
-      answer_image           // <-- NEW
+      question_image,
+      option_images,
+      answer_image,
+      section                    // <-- NEW: 'A' or 'B'
     } = req.body;
     
-    console.log(`📝 Adding ${question_type || 'multiple_choice'} question to quiz: ${quizId}`);
+    console.log(`📝 Adding ${question_type || 'multiple_choice'} question to quiz: ${quizId}, section: ${section || 'A'}`);
 
     if (!question_text && !question_image) {
       return res.status(400).json({ 
@@ -2119,13 +2138,14 @@ app.post('/api/admin/quizzes/:quizId/questions', authenticateToken, authenticate
     const questionData = {
       quiz_id: quizId,
       question_text: question_text || null,
-      question_image: question_image || null,     // <-- NEW
-      option_images: option_images || [],         // <-- NEW
-      answer_image: answer_image || null,         // <-- NEW
+      question_image: question_image || null,
+      option_images: option_images || [],
+      answer_image: answer_image || null,
       question_type: qType,
       marks: questionMarks,
       points: questionMarks,
       display_order: finalDisplayOrder,
+      section: section || 'A',           // <-- store section
       created_at: new Date().toISOString()
     };
 
@@ -2179,7 +2199,7 @@ app.post('/api/admin/quizzes/:quizId/questions', authenticateToken, authenticate
     await logAdminAction(
       req.user.id,
       'ADD_QUESTION',
-      `Added ${qType} question to quiz ID ${quizId}`,
+      `Added ${qType} question to quiz ID ${quizId} (section ${section || 'A'})`,
       req.ip
     );
 
@@ -2197,22 +2217,158 @@ app.post('/api/admin/quizzes/:quizId/questions', authenticateToken, authenticate
   }
 });
 
-// Update quiz (admin)
+// NEW: Update a question (admin) - includes section
+app.put('/api/admin/quizzes/:quizId/questions/:questionId', authenticateToken, authenticateAdmin, async (req, res) => {
+  try {
+    const { quizId, questionId } = req.params;
+    const { 
+      question_text, options, correct_answer, explanation, marks, display_order,
+      question_type, expected_answer, question_image, option_images, answer_image,
+      section
+    } = req.body;
+
+    console.log(`✏️ Updating question ${questionId} in quiz ${quizId}`);
+
+    // Verify question exists and belongs to quiz
+    const { data: existing, error: fetchError } = await supabase
+      .from('quiz_questions')
+      .select('*')
+      .eq('id', questionId)
+      .eq('quiz_id', quizId)
+      .single();
+
+    if (fetchError || !existing) {
+      return res.status(404).json({ success: false, message: 'Question not found in this quiz' });
+    }
+
+    const qType = question_type || existing.question_type;
+    const updateData = {
+      question_text: question_text !== undefined ? question_text : existing.question_text,
+      question_image: question_image !== undefined ? question_image : existing.question_image,
+      option_images: option_images !== undefined ? option_images : existing.option_images,
+      answer_image: answer_image !== undefined ? answer_image : existing.answer_image,
+      question_type: qType,
+      marks: marks !== undefined ? marks : existing.marks,
+      points: marks !== undefined ? marks : existing.marks,
+      display_order: display_order !== undefined ? display_order : existing.display_order,
+      section: section !== undefined ? section : existing.section,
+      explanation: explanation !== undefined ? explanation : existing.explanation,
+      updated_at: new Date().toISOString()
+    };
+
+    if (qType === 'multiple_choice') {
+      if (options !== undefined) updateData.options = options;
+      if (correct_answer !== undefined) updateData.correct_answer = correct_answer;
+      updateData.expected_answer = null;
+    } else {
+      updateData.options = null;
+      updateData.correct_answer = null;
+      if (expected_answer !== undefined) updateData.expected_answer = expected_answer?.trim().toLowerCase() || null;
+    }
+
+    const { data: updated, error: updateError } = await supabase
+      .from('quiz_questions')
+      .update(updateData)
+      .eq('id', questionId)
+      .select()
+      .single();
+
+    if (updateError) {
+      console.error('Error updating question:', updateError);
+      return res.status(500).json({ success: false, message: updateError.message });
+    }
+
+    // Recalculate total marks for the quiz
+    const { data: questions } = await supabase
+      .from('quiz_questions')
+      .select('marks')
+      .eq('quiz_id', quizId);
+    if (questions && questions.length) {
+      const totalMarks = questions.reduce((sum, q) => sum + (q.marks || 1), 0);
+      const passingPoints = Math.round(totalMarks * 0.5);
+      await supabase
+        .from('quizzes')
+        .update({ total_marks: totalMarks, total_points: totalMarks, passing_points: passingPoints, updated_at: new Date().toISOString() })
+        .eq('id', quizId);
+    }
+
+    await logAdminAction(req.user.id, 'UPDATE_QUESTION', `Updated question ${questionId} in quiz ${quizId}`, req.ip);
+    res.json({ success: true, message: 'Question updated', question: updated });
+  } catch (err) {
+    console.error('Error updating question:', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// NEW: Delete a question (admin)
+app.delete('/api/admin/quizzes/:quizId/questions/:questionId', authenticateToken, authenticateAdmin, async (req, res) => {
+  try {
+    const { quizId, questionId } = req.params;
+
+    const { data: deleted, error } = await supabase
+      .from('quiz_questions')
+      .delete()
+      .eq('id', questionId)
+      .eq('quiz_id', quizId)
+      .select()
+      .single();
+
+    if (error) {
+      if (error.code === 'PGRST116') {
+        return res.status(404).json({ success: false, message: 'Question not found' });
+      }
+      throw error;
+    }
+
+    // Recalculate total marks
+    const { data: questions } = await supabase
+      .from('quiz_questions')
+      .select('marks')
+      .eq('quiz_id', quizId);
+    if (questions && questions.length) {
+      const totalMarks = questions.reduce((sum, q) => sum + (q.marks || 1), 0);
+      const passingPoints = Math.round(totalMarks * 0.5);
+      await supabase
+        .from('quizzes')
+        .update({ total_marks: totalMarks, total_points: totalMarks, passing_points: passingPoints, updated_at: new Date().toISOString() })
+        .eq('id', quizId);
+    } else {
+      // No questions left, reset quiz total marks to 0
+      await supabase
+        .from('quizzes')
+        .update({ total_marks: 0, total_points: 0, passing_points: 0, updated_at: new Date().toISOString() })
+        .eq('id', quizId);
+    }
+
+    await logAdminAction(req.user.id, 'DELETE_QUESTION', `Deleted question ${questionId} from quiz ${quizId}`, req.ip);
+    res.json({ success: true, message: 'Question deleted' });
+  } catch (err) {
+    console.error('Error deleting question:', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Update quiz (admin) - UPDATED to include exam_year and exam_type
 app.put('/api/admin/quizzes/:quizId', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
     const { quizId } = req.params;
-    const { subject_id, title, description, duration, total_marks, is_active, target_form } = req.body;
+    const { 
+      subject_id, title, description, duration, total_marks, is_active, target_form,
+      section_a_marks, section_b_marks, exam_year, exam_type 
+    } = req.body;
     
     const updateData = {};
-    if (subject_id) updateData.subject_id = subject_id;
-    if (title) updateData.title = title;
+    if (subject_id !== undefined) updateData.subject_id = subject_id;
+    if (title !== undefined) updateData.title = title;
     if (description !== undefined) updateData.description = description;
-    if (duration) updateData.duration = duration;
+    if (duration !== undefined) updateData.duration = duration;
     if (total_marks !== undefined) updateData.total_marks = total_marks;
-    if (req.body.section_a_marks !== undefined) updateData.section_a_marks = parseInt(req.body.section_a_marks);
-    if (req.body.section_b_marks !== undefined) updateData.section_b_marks = parseInt(req.body.section_b_marks);
+    if (section_a_marks !== undefined) updateData.section_a_marks = parseInt(section_a_marks);
+    if (section_b_marks !== undefined) updateData.section_b_marks = parseInt(section_b_marks);
     if (is_active !== undefined) updateData.is_active = is_active;
     if (target_form !== undefined) updateData.target_form = target_form;
+    if (exam_year !== undefined) updateData.exam_year = exam_year;
+    if (exam_type !== undefined) updateData.exam_type = exam_type;
     updateData.updated_at = new Date().toISOString();
     
     const { data: quiz, error } = await supabase
@@ -2785,9 +2941,9 @@ app.get('/api/quiz/attempt/:attemptId', authenticateToken, async (req, res) => {
     const formattedAnswers = answers.map((ans, idx) => ({
       question_id: ans.question_id || idx,
       question_text: ans.question_text || '',
-      question_image: ans.question_image || null,     // <-- ADD
-      option_images: ans.option_images || [],         // <-- ADD
-      answer_image: ans.answer_image || null,  
+      question_image: ans.question_image || null,
+      option_images: ans.option_images || [],
+      answer_image: ans.answer_image || null,
       question_type: ans.question_type || 'multiple_choice',
       selected_answer: ans.selected_answer,
       selected_answer_text: ans.selected_answer_text || 'Not answered',
@@ -4875,6 +5031,8 @@ app.listen(PORT, () => {
   console.log('   PUT    /api/admin/quizzes/:quizId');
   console.log('   DELETE /api/admin/quizzes/:quizId');
   console.log('   POST   /api/admin/quizzes/:quizId/questions');
+  console.log('   PUT    /api/admin/quizzes/:quizId/questions/:questionId');   // NEW
+  console.log('   DELETE /api/admin/quizzes/:quizId/questions/:questionId'); // NEW
   console.log('   GET    /api/admin/quizzes/:quizId/submissions');
   console.log('   POST   /api/admin/grade');
   
