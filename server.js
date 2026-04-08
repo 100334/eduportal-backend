@@ -3067,9 +3067,16 @@ app.get('/api/admin/subjects/all', authenticateToken, authenticateAdmin, async (
       .from('subjects')
       .select('id, name')
       .order('name');
+
     if (error) throw error;
+
+    // Check your server terminal! 
+    // If this says [], you have no data in the table or RLS is blocking you.
+    console.log("Subjects found in Supabase:", subjects);
+
     res.json({ success: true, subjects: subjects || [] });
   } catch (error) {
+    console.error("Fetch Error:", error.message);
     res.status(500).json({ success: false, message: error.message });
   }
 });
