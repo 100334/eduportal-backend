@@ -3300,6 +3300,7 @@ app.delete('/api/admin/lessons/:id', authenticateToken, authenticateAdmin, async
 
 // Get all lessons for learner (filtered by form)
 // Get all lessons for learner (filtered by form) - with resource_type
+// Get all lessons for learner (filtered by form) - without nested relation
 app.get('/api/learner/lessons', authenticateToken, async (req, res) => {
   try {
     const { data: learner, error: learnerError } = await supabase
@@ -3310,7 +3311,8 @@ app.get('/api/learner/lessons', authenticateToken, async (req, res) => {
     if (learnerError) throw learnerError;
     const learnerForm = learner.form;
 
-    let query = supabase.from('lessons').select('*, quiz:quiz_id(id, title, duration)');
+    // Simple select – no nested relation
+    let query = supabase.from('lessons').select('*');
     if (learnerForm !== 'All') {
       query = query.or(`target_form.eq.All,target_form.eq.${learnerForm}`);
     }
