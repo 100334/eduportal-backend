@@ -4994,6 +4994,54 @@ app.get('/api/debug/learners', async (req, res) => {
 });
 
 // ============================================
+// CLOUDFLARE R2 PRESIGNED UPLOAD URL ENDPOINT
+// ============================================
+const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
+const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
+const crypto = require('crypto');
+
+// Initialize R2 client
+const r2Client = new S3Client({
+  region: 'auto',
+  endpoint: `https://${process.env.CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+  credentials: {
+    accessKeyId: process.env.R2_ACCESS_KEY_ID,
+    secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
+  },
+});
+
+app.post('/api/admin/r2-upload-url', authenticateToken, authenticateAdmin, async (req, res) => {
+  try {
+    const { fileName, fileType } = req.body;
+    if (!fileName) {
+      return res.status(400).json({ success: false, message: 'fileName is required' });
+    }
+
+    // Generate a unique file key
+    const fileExtension = fileName.split('.').pop();
+    const uniqueId = crypto.randomBytes(16).toString('hex');
+    const key = `uploads/${Date.now()}-${uniqueId}.${fileExtension}`;
+
+    const command = new PutObjectCommand({
+      Bucket: process.env.R2_BUCKET_NAME,
+      Key: key,
+      ContentType: fileType || 'application/octet-stream',
+    });
+
+    const uploadUrl = await getSignedUrl(r2Client, command, { expiresIn: 3600 }); // 1 hour expiry
+
+    res.json({
+      success: true,
+      uploadUrl,
+      fileUrl: `https://${process.env.R2_PUBLIC_URL}/${key}`,
+      key,
+    });
+  } catch (error) {
+    console.error('Error generating R2 upload URL:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+// ============================================
 // 404 HANDLER
 // ============================================
 app.use((req, res) => {
