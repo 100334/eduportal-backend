@@ -3273,21 +3273,20 @@ app.put('/api/admin/lessons/:id', authenticateToken, authenticateAdmin, async (r
     const { id } = req.params;
     const updates = { ...req.body };
 
-    // Clean up empty strings to null for foreign keys
+    // Clean foreign keys
     if (updates.subject_id === '' || updates.subject_id === 'null') updates.subject_id = null;
     if (updates.quiz_id === '' || updates.quiz_id === 'null') updates.quiz_id = null;
     
-    // Convert numeric fields if present
-    if (updates.subject_id !== undefined && updates.subject_id !== null) {
-      updates.subject_id = parseInt(updates.subject_id);
-      if (isNaN(updates.subject_id)) updates.subject_id = null;
-    }
-    if (updates.quiz_id !== undefined && updates.quiz_id !== null) {
-      updates.quiz_id = parseInt(updates.quiz_id);
-      if (isNaN(updates.quiz_id)) updates.quiz_id = null;
-    }
-    if (updates.display_order !== undefined) {
-      updates.display_order = parseInt(updates.display_order) || 0;
+    if (updates.subject_id !== null && !isNaN(updates.subject_id)) updates.subject_id = parseInt(updates.subject_id);
+    if (updates.quiz_id !== null && !isNaN(updates.quiz_id)) updates.quiz_id = parseInt(updates.quiz_id);
+    if (updates.display_order !== undefined) updates.display_order = parseInt(updates.display_order) || 0;
+
+    // ✅ If resource_type not provided, infer from URLs / quiz_id
+    if (!updates.resource_type) {
+      if (updates.video_url) updates.resource_type = 'video';
+      else if (updates.pdf_url) updates.resource_type = 'pdf';
+      else if (updates.quiz_id) updates.resource_type = 'quiz';
+      else updates.resource_type = 'other';
     }
 
     updates.updated_at = new Date().toISOString();
