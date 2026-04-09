@@ -5003,7 +5003,7 @@ app.get('/api/debug/learners', async (req, res) => {
 // ============================================
 const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
-const crypto = require('crypto');
+// crypto is already required at the top of server.js – DO NOT require it again!
 
 // Initialize R2 client (only if all required env vars are present)
 let r2Client = null;
@@ -5032,12 +5032,10 @@ app.post('/api/admin/r2-upload-url', authenticateToken, authenticateAdmin, async
   try {
     const { fileName, fileType } = req.body;
     
-    // 1. Validate input
     if (!fileName || typeof fileName !== 'string') {
       return res.status(400).json({ success: false, message: 'Valid fileName is required' });
     }
 
-    // 2. Check R2 client readiness
     if (!r2Client) {
       console.error('R2 client not available – missing or invalid configuration');
       return res.status(503).json({ 
@@ -5047,37 +5045,30 @@ app.post('/api/admin/r2-upload-url', authenticateToken, authenticateAdmin, async
       });
     }
 
-    // 3. Validate bucket name
     const bucketName = process.env.R2_BUCKET_NAME;
     if (!bucketName) {
       return res.status(500).json({ success: false, message: 'R2_BUCKET_NAME environment variable is missing' });
     }
 
-    // 4. Generate a safe file key (sanitize filename)
     const originalExt = fileName.split('.').pop() || 'bin';
     const safeExt = originalExt.toLowerCase().replace(/[^a-z0-9]/g, '');
     const finalExt = safeExt || 'bin';
     const timestamp = Date.now();
-    const randomId = crypto.randomBytes(16).toString('hex');
+    const randomId = crypto.randomBytes(16).toString('hex');  // crypto is already defined globally
     const key = `uploads/${timestamp}-${randomId}.${finalExt}`;
 
-    // 5. Create PutObject command
     const command = new PutObjectCommand({
       Bucket: bucketName,
       Key: key,
       ContentType: fileType || 'application/octet-stream',
-      // Optional: set cache control for better performance
       CacheControl: 'max-age=31536000',
     });
 
-    // 6. Generate presigned URL (valid for 1 hour)
     const uploadUrl = await getSignedUrl(r2Client, command, { expiresIn: 3600 });
 
-    // 7. Construct public URL (if R2_PUBLIC_URL is set)
     const publicBase = process.env.R2_PUBLIC_URL;
     const fileUrl = publicBase ? `${publicBase.replace(/\/$/, '')}/${key}` : null;
 
-    // 8. Return success
     res.json({
       success: true,
       uploadUrl,
@@ -5089,7 +5080,6 @@ app.post('/api/admin/r2-upload-url', authenticateToken, authenticateAdmin, async
 
   } catch (error) {
     console.error('❌ R2 presigned URL generation failed:', error);
-    // Provide detailed error message for debugging (but hide stack in production)
     res.status(500).json({
       success: false,
       message: error.message,
