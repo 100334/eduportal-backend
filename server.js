@@ -3219,16 +3219,24 @@ app.post('/api/admin/lessons', authenticateToken, authenticateAdmin, async (req,
   try {
     let { title, description, video_url, pdf_url, subject_id, target_form, quiz_id, display_order } = req.body;
     
-    if (!title) {
-      return res.status(400).json({ success: false, message: 'Title is required' });
-    }
+    if (!title) return res.status(400).json({ success: false, message: 'Title is required' });
     
-    // Convert empty strings to null (Supabase expects null for optional UUID fields)
+    // Clean foreign keys
     if (subject_id === '' || subject_id === 'null') subject_id = null;
     if (quiz_id === '' || quiz_id === 'null') quiz_id = null;
     
-    // Ensure display_order is a number
+    if (subject_id !== null) subject_id = parseInt(subject_id);
+    if (quiz_id !== null) quiz_id = parseInt(quiz_id);
     display_order = parseInt(display_order) || 0;
+    
+    // Determine resource_type if not provided
+    let resource_type = req.body.resource_type;
+    if (!resource_type) {
+      if (video_url) resource_type = 'video';
+      else if (pdf_url) resource_type = 'pdf';
+      else if (quiz_id) resource_type = 'quiz';
+      else resource_type = 'other';
+    }
     
     const { data, error } = await supabase
       .from('lessons')
@@ -3241,20 +3249,16 @@ app.post('/api/admin/lessons', authenticateToken, authenticateAdmin, async (req,
         target_form: target_form || 'All',
         quiz_id,
         display_order,
-        created_at: new Date(),
-        updated_at: new Date()
+        resource_type,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
       })
       .select()
       .single();
       
     if (error) {
-      console.error('Supabase insert error:', error);
-      return res.status(500).json({ 
-        success: false, 
-        message: error.message,
-        details: error.details,
-        hint: error.hint
-      });
+      console.error('Lesson insert error:', error);
+      return res.status(500).json({ success: false, message: error.message });
     }
     
     res.json({ success: true, lesson: data });
@@ -3267,21 +3271,45 @@ app.post('/api/admin/lessons', authenticateToken, authenticateAdmin, async (req,
 app.put('/api/admin/lessons/:id', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
     const { id } = req.params;
-    const updates = req.body;
-    updates.updated_at = new Date();
+    const updates = { ...req.body };
+
+    // Clean up empty strings to null for foreign keys
+    if (updates.subject_id === '' || updates.subject_id === 'null') updates.subject_id = null;
+    if (updates.quiz_id === '' || updates.quiz_id === 'null') updates.quiz_id = null;
+    
+    // Convert numeric fields if present
+    if (updates.subject_id !== undefined && updates.subject_id !== null) {
+      updates.subject_id = parseInt(updates.subject_id);
+      if (isNaN(updates.subject_id)) updates.subject_id = null;
+    }
+    if (updates.quiz_id !== undefined && updates.quiz_id !== null) {
+      updates.quiz_id = parseInt(updates.quiz_id);
+      if (isNaN(updates.quiz_id)) updates.quiz_id = null;
+    }
+    if (updates.display_order !== undefined) {
+      updates.display_order = parseInt(updates.display_order) || 0;
+    }
+
+    updates.updated_at = new Date().toISOString();
+
     const { data, error } = await supabase
       .from('lessons')
       .update(updates)
       .eq('id', id)
       .select()
       .single();
-    if (error) throw error;
+
+    if (error) {
+      console.error('Lesson update error:', error);
+      return res.status(400).json({ success: false, message: error.message });
+    }
+
     res.json({ success: true, lesson: data });
   } catch (error) {
+    console.error('Unexpected error updating lesson:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 });
-
 // DELETE lesson
 app.delete('/api/admin/lessons/:id', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
