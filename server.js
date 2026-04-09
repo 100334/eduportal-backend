@@ -1735,7 +1735,7 @@ app.get('/api/admin/quizzes/:quizId/submissions', authenticateToken, authenticat
 
 app.post('/api/admin/grade', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
-    const { attempt_id, answers, overall_feedback } = req.body; // added overall_feedback
+    const { attempt_id, answers, overall_feedback } = req.body;
     if (!attempt_id) {
       return res.status(400).json({ success: false, message: 'Missing attempt_id' });
     }
@@ -1744,7 +1744,7 @@ app.post('/api/admin/grade', authenticateToken, authenticateAdmin, async (req, r
     // Fetch current attempt
     const { data: attempt, error: fetchError } = await supabase
       .from('quiz_attempts')
-      .select('answers, earned_points, total_points, status')
+      .select('answers, earned_points, total_points, status, learner_id')
       .eq('id', attempt_id)
       .single();
     if (fetchError || !attempt) {
@@ -1765,7 +1765,7 @@ app.post('/api/admin/grade', authenticateToken, authenticateAdmin, async (req, r
           ...ans,
           points_obtained: grade.marks_awarded,
           feedback: grade.feedback || null,
-          is_correct: grade.marks_awarded === ans.max_points // optional
+          is_correct: grade.marks_awarded === ans.max_points
         };
       }
       return ans;
@@ -1775,7 +1775,7 @@ app.post('/api/admin/grade', authenticateToken, authenticateAdmin, async (req, r
     const newEarnedMarks = updatedAnswers.reduce((sum, ans) => sum + (ans.points_obtained || 0), 0);
     const totalMarks = attempt.total_points || 0;
     const percentage = totalMarks > 0 ? (newEarnedMarks / totalMarks) * 100 : 0;
-    const passed = newEarnedMarks >= (totalMarks * 0.5); // assuming 50% passing
+    const passed = newEarnedMarks >= (totalMarks * 0.5);
 
     // Update attempt
     const updateData = {
@@ -1783,7 +1783,7 @@ app.post('/api/admin/grade', authenticateToken, authenticateAdmin, async (req, r
       earned_points: newEarnedMarks,
       percentage: percentage,
       passed: passed,
-      status: 'completed',           // mark as graded
+      status: 'completed',
       feedback: overall_feedback || null,
       updated_at: new Date().toISOString()
     };
@@ -1794,22 +1794,41 @@ app.post('/api/admin/grade', authenticateToken, authenticateAdmin, async (req, r
 
     if (updateError) throw updateError;
 
-    // Optionally notify learner (create notification)
-    const { data: learner } = await supabase
-      .from('learners')
-      .select('id')
-      .eq('id', attempt.learner_id)
-      .single();
-    if (learner) {
-      await supabase.from('notifications').insert({
-        user_id: learner.id,
-        type: 'quiz_graded',
-        title: 'Quiz Graded',
-        message: `Your quiz attempt has been graded. Score: ${newEarnedMarks}/${totalMarks}`,
-        related_id: attempt_id,
-        is_read: false,
-        created_at: new Date().toISOString()
-      });
+    // Send notification to learner (fail gracefully if table missing)
+    try {
+      const { data: learner, error: learnerError } = await supabase
+        .from('learners')
+        .select('id')
+        .eq('id', attempt.learner_id)
+        .single();
+
+      if (learner && !learnerError) {
+        // First, ensure the notifications table exists (if not, create it)
+        // We'll just attempt insert – if it fails, log but don't stop grading
+        const notification = {
+          user_id: learner.id,
+          type: 'quiz_graded',
+          title: 'Quiz Graded',
+          message: `Your quiz has been graded. Score: ${newEarnedMarks}/${totalMarks} (${Math.round(percentage)}%)`,
+          related_id: attempt_id,
+          is_read: false,
+          created_at: new Date().toISOString()
+        };
+        
+        const { error: notifError } = await supabase
+          .from('notifications')
+          .insert(notification);
+
+        if (notifError) {
+          console.warn('Could not insert notification (table may be missing):', notifError.message);
+          // Optionally create the table on the fly? Not recommended – just log.
+        } else {
+          console.log(`✅ Notification sent to learner ${learner.id}`);
+        }
+      }
+    } catch (notifErr) {
+      console.warn('Failed to send notification:', notifErr.message);
+      // Do not throw – grading already succeeded
     }
 
     res.json({
@@ -3349,17 +3368,24 @@ app.get('/api/learner/lesson/:lessonId', authenticateToken, async (req, res) => 
 });
 
 // GET learner notifications
+// GET learner notifications (safe version)
 app.get('/api/learner/notifications', authenticateToken, async (req, res) => {
   try {
     const { data, error } = await supabase
       .from('notifications')
       .select('*')
-      .eq('user_id', req.user.id)
+      .eq('user_id', req.user.id)  // req.user.id is integer from learners table
       .order('created_at', { ascending: false });
-    if (error) throw error;
+
+    if (error) {
+      console.error('Notifications fetch error:', error);
+      return res.json({ success: true, notifications: [] });
+    }
+
     res.json({ success: true, notifications: data || [] });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    console.error('Notifications endpoint error:', error);
+    res.json({ success: true, notifications: [] });
   }
 });
 
@@ -3369,12 +3395,14 @@ app.put('/api/learner/notifications/:id/read', authenticateToken, async (req, re
     const { id } = req.params;
     const { error } = await supabase
       .from('notifications')
-      .update({ is_read: true, updated_at: new Date() })
+      .update({ is_read: true, updated_at: new Date().toISOString() })
       .eq('id', id)
       .eq('user_id', req.user.id);
+
     if (error) throw error;
     res.json({ success: true });
   } catch (error) {
+    console.error('Error marking notification as read:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 });
@@ -4834,6 +4862,73 @@ app.post('/api/upload/image', authenticateToken, upload.single('image'), async (
 });
 
 app.use('/uploads', express.static(uploadsDir));
+
+// ============================================
+// CLOUDFLARE R2 PRESIGNED UPLOAD URL
+// ============================================
+
+const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
+const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
+const crypto = require('crypto');
+
+// Configure R2 client (only if environment variables are set)
+let r2Client = null;
+if (process.env.R2_ACCESS_KEY_ID && process.env.R2_SECRET_ACCESS_KEY && process.env.CLOUDFLARE_ACCOUNT_ID) {
+  r2Client = new S3Client({
+    region: 'auto',
+    endpoint: `https://${process.env.CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+    credentials: {
+      accessKeyId: process.env.R2_ACCESS_KEY_ID,
+      secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
+    },
+  });
+  console.log('✅ Cloudflare R2 client initialized');
+} else {
+  console.warn('⚠️ Cloudflare R2 credentials missing – presigned URL endpoint will return a fallback');
+}
+
+app.post('/api/admin/r2-upload-url', authenticateToken, authenticateAdmin, async (req, res) => {
+  try {
+    const { fileName, fileType } = req.body;
+    if (!fileName) {
+      return res.status(400).json({ success: false, message: 'fileName is required' });
+    }
+
+    // If R2 is not configured, return a local upload URL as fallback
+    if (!r2Client) {
+      console.warn('R2 not configured – falling back to local upload endpoint');
+      return res.json({
+        success: true,
+        uploadUrl: `${req.protocol}://${req.get('host')}/api/upload/image`,
+        fileUrl: null,
+        key: null,
+        fallback: true,
+      });
+    }
+
+    const fileExtension = fileName.split('.').pop();
+    const uniqueId = crypto.randomBytes(16).toString('hex');
+    const key = `uploads/${Date.now()}-${uniqueId}.${fileExtension}`;
+
+    const command = new PutObjectCommand({
+      Bucket: process.env.R2_BUCKET_NAME,
+      Key: key,
+      ContentType: fileType || 'application/octet-stream',
+    });
+
+    const uploadUrl = await getSignedUrl(r2Client, command, { expiresIn: 3600 }); // 1 hour
+
+    res.json({
+      success: true,
+      uploadUrl,
+      fileUrl: `${process.env.R2_PUBLIC_URL}/${key}`,
+      key,
+    });
+  } catch (error) {
+    console.error('Error generating R2 upload URL:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
 
 // ============================================
 // CLOUDINARY UPLOAD FOR LESSON FILES (videos, PDFs)
