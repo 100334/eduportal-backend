@@ -4999,60 +4999,102 @@ app.get('/api/debug/learners', async (req, res) => {
 });
 
 // ============================================
+// CLOUDFLARE R2 PRESIGNED UPLOAD URL ENDPOINT (UPDATED)
 // ============================================
-// CLOUDFLARE R2 PRESIGNED UPLOAD URL ENDPOINT (CRITICAL)
-// ============================================
+const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
+const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
+const crypto = require('crypto');
+
+// Initialize R2 client (only if all required env vars are present)
 let r2Client = null;
-if (process.env.CLOUDFLARE_ACCOUNT_ID && process.env.R2_ACCESS_KEY_ID && process.env.R2_SECRET_ACCESS_KEY) {
-  r2Client = new S3Client({
-    region: 'auto',
-    endpoint: `https://${process.env.CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com`,
-    credentials: {
-      accessKeyId: process.env.R2_ACCESS_KEY_ID,
-      secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
-    },
-  });
-  console.log('✅ Cloudflare R2 client initialized');
+const requiredR2Env = ['CLOUDFLARE_ACCOUNT_ID', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY', 'R2_BUCKET_NAME'];
+const missingEnv = requiredR2Env.filter(key => !process.env[key]);
+
+if (missingEnv.length === 0) {
+  try {
+    r2Client = new S3Client({
+      region: 'auto',
+      endpoint: `https://${process.env.CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+      credentials: {
+        accessKeyId: process.env.R2_ACCESS_KEY_ID,
+        secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
+      },
+    });
+    console.log('✅ Cloudflare R2 client initialized');
+  } catch (err) {
+    console.error('❌ Failed to initialize R2 client:', err.message);
+  }
 } else {
-  console.warn('⚠️ Cloudflare R2 credentials missing – presigned URL endpoint will return 500');
+  console.warn(`⚠️ Cloudflare R2 credentials missing: ${missingEnv.join(', ')}. R2 uploads will fail.`);
 }
 
 app.post('/api/admin/r2-upload-url', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
     const { fileName, fileType } = req.body;
-    if (!fileName) {
-      return res.status(400).json({ success: false, message: 'fileName is required' });
+    
+    // 1. Validate input
+    if (!fileName || typeof fileName !== 'string') {
+      return res.status(400).json({ success: false, message: 'Valid fileName is required' });
     }
 
+    // 2. Check R2 client readiness
     if (!r2Client) {
-      console.error('R2 client not configured – missing credentials');
-      return res.status(500).json({ success: false, message: 'R2 storage not configured on server' });
+      console.error('R2 client not available – missing or invalid configuration');
+      return res.status(503).json({ 
+        success: false, 
+        message: 'R2 storage service is not configured. Please contact administrator.',
+        missingEnv: missingEnv
+      });
     }
 
-    const fileExtension = fileName.split('.').pop();
-    const uniqueId = crypto.randomBytes(16).toString('hex');
-    const key = `uploads/${Date.now()}-${uniqueId}.${fileExtension}`;
+    // 3. Validate bucket name
+    const bucketName = process.env.R2_BUCKET_NAME;
+    if (!bucketName) {
+      return res.status(500).json({ success: false, message: 'R2_BUCKET_NAME environment variable is missing' });
+    }
 
+    // 4. Generate a safe file key (sanitize filename)
+    const originalExt = fileName.split('.').pop() || 'bin';
+    const safeExt = originalExt.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const finalExt = safeExt || 'bin';
+    const timestamp = Date.now();
+    const randomId = crypto.randomBytes(16).toString('hex');
+    const key = `uploads/${timestamp}-${randomId}.${finalExt}`;
+
+    // 5. Create PutObject command
     const command = new PutObjectCommand({
-      Bucket: process.env.R2_BUCKET_NAME,
+      Bucket: bucketName,
       Key: key,
       ContentType: fileType || 'application/octet-stream',
+      // Optional: set cache control for better performance
+      CacheControl: 'max-age=31536000',
     });
 
-    const uploadUrl = await getSignedUrl(r2Client, command, { expiresIn: 3600 }); // 1 hour expiry
+    // 6. Generate presigned URL (valid for 1 hour)
+    const uploadUrl = await getSignedUrl(r2Client, command, { expiresIn: 3600 });
 
-    // Construct public URL (must be set in env)
-    const publicUrl = process.env.R2_PUBLIC_URL ? `${process.env.R2_PUBLIC_URL}/${key}` : null;
+    // 7. Construct public URL (if R2_PUBLIC_URL is set)
+    const publicBase = process.env.R2_PUBLIC_URL;
+    const fileUrl = publicBase ? `${publicBase.replace(/\/$/, '')}/${key}` : null;
 
+    // 8. Return success
     res.json({
       success: true,
       uploadUrl,
-      fileUrl: publicUrl,
+      fileUrl,
       key,
+      bucket: bucketName,
+      expiresIn: 3600,
     });
+
   } catch (error) {
-    console.error('Error generating R2 upload URL:', error);
-    res.status(500).json({ success: false, message: error.message });
+    console.error('❌ R2 presigned URL generation failed:', error);
+    // Provide detailed error message for debugging (but hide stack in production)
+    res.status(500).json({
+      success: false,
+      message: error.message,
+      ...(process.env.NODE_ENV !== 'production' && { stack: error.stack }),
+    });
   }
 });
 // ============================================
