@@ -3319,14 +3319,37 @@ app.put('/api/admin/lessons/:id', authenticateToken, authenticateAdmin, async (r
 app.delete('/api/admin/lessons/:id', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
     const { id } = req.params;
-    const { error } = await supabase.from('lessons').delete().eq('id', id);
-    if (error) throw error;
-    res.json({ success: true });
+    console.log(`🗑️ Deleting lesson with ID: ${id}`);
+
+    // Verify the lesson exists before deletion (optional)
+    const { data: existing, error: fetchError } = await supabase
+      .from('lessons')
+      .select('id')
+      .eq('id', id)
+      .single();
+
+    if (fetchError || !existing) {
+      console.error('Lesson not found:', fetchError);
+      return res.status(404).json({ success: false, message: 'Lesson not found' });
+    }
+
+    const { error } = await supabase
+      .from('lessons')
+      .delete()
+      .eq('id', id);
+
+    if (error) {
+      console.error('Delete error:', error);
+      return res.status(500).json({ success: false, message: error.message });
+    }
+
+    console.log(`✅ Lesson ${id} deleted successfully`);
+    res.json({ success: true, message: 'Lesson deleted successfully' });
   } catch (error) {
+    console.error('Unexpected error deleting lesson:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 });
-
 // ============================================
 // LEARNER LESSONS ENDPOINTS
 // ============================================
