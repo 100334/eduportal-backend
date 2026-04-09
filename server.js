@@ -4994,21 +4994,23 @@ app.get('/api/debug/learners', async (req, res) => {
 });
 
 // ============================================
-// CLOUDFLARE R2 PRESIGNED UPLOAD URL ENDPOINT
 // ============================================
-const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
-const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
-const crypto = require('crypto');
-
-// Initialize R2 client
-const r2Client = new S3Client({
-  region: 'auto',
-  endpoint: `https://${process.env.CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com`,
-  credentials: {
-    accessKeyId: process.env.R2_ACCESS_KEY_ID,
-    secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
-  },
-});
+// CLOUDFLARE R2 PRESIGNED UPLOAD URL ENDPOINT (CRITICAL)
+// ============================================
+let r2Client = null;
+if (process.env.CLOUDFLARE_ACCOUNT_ID && process.env.R2_ACCESS_KEY_ID && process.env.R2_SECRET_ACCESS_KEY) {
+  r2Client = new S3Client({
+    region: 'auto',
+    endpoint: `https://${process.env.CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+    credentials: {
+      accessKeyId: process.env.R2_ACCESS_KEY_ID,
+      secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
+    },
+  });
+  console.log('✅ Cloudflare R2 client initialized');
+} else {
+  console.warn('⚠️ Cloudflare R2 credentials missing – presigned URL endpoint will return 500');
+}
 
 app.post('/api/admin/r2-upload-url', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
@@ -5017,7 +5019,11 @@ app.post('/api/admin/r2-upload-url', authenticateToken, authenticateAdmin, async
       return res.status(400).json({ success: false, message: 'fileName is required' });
     }
 
-    // Generate a unique file key
+    if (!r2Client) {
+      console.error('R2 client not configured – missing credentials');
+      return res.status(500).json({ success: false, message: 'R2 storage not configured on server' });
+    }
+
     const fileExtension = fileName.split('.').pop();
     const uniqueId = crypto.randomBytes(16).toString('hex');
     const key = `uploads/${Date.now()}-${uniqueId}.${fileExtension}`;
@@ -5030,10 +5036,13 @@ app.post('/api/admin/r2-upload-url', authenticateToken, authenticateAdmin, async
 
     const uploadUrl = await getSignedUrl(r2Client, command, { expiresIn: 3600 }); // 1 hour expiry
 
+    // Construct public URL (must be set in env)
+    const publicUrl = process.env.R2_PUBLIC_URL ? `${process.env.R2_PUBLIC_URL}/${key}` : null;
+
     res.json({
       success: true,
       uploadUrl,
-      fileUrl: `https://${process.env.R2_PUBLIC_URL}/${key}`,
+      fileUrl: publicUrl,
       key,
     });
   } catch (error) {
