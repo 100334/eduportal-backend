@@ -3294,6 +3294,7 @@ app.delete('/api/admin/lessons/:id', authenticateToken, authenticateAdmin, async
 // ============================================
 
 // Get all lessons for learner (filtered by form)
+// Get all lessons for learner (filtered by form) - with resource_type
 app.get('/api/learner/lessons', authenticateToken, async (req, res) => {
   try {
     const { data: learner, error: learnerError } = await supabase
@@ -3304,13 +3305,26 @@ app.get('/api/learner/lessons', authenticateToken, async (req, res) => {
     if (learnerError) throw learnerError;
     const learnerForm = learner.form;
 
-    let query = supabase.from('lessons').select('*');
+    let query = supabase.from('lessons').select('*, quiz:quiz_id(id, title, duration)');
     if (learnerForm !== 'All') {
       query = query.or(`target_form.eq.All,target_form.eq.${learnerForm}`);
     }
     const { data: lessons, error } = await query.order('display_order', { ascending: true });
     if (error) throw error;
-    res.json({ success: true, lessons });
+
+    // Add resource_type if missing (fallback logic)
+    const enriched = (lessons || []).map(lesson => {
+      let resourceType = lesson.resource_type;
+      if (!resourceType) {
+        if (lesson.video_url) resourceType = 'video';
+        else if (lesson.pdf_url) resourceType = 'pdf';
+        else if (lesson.quiz_id) resourceType = 'quiz';
+        else resourceType = 'other';
+      }
+      return { ...lesson, resource_type: resourceType };
+    });
+
+    res.json({ success: true, lessons: enriched });
   } catch (error) {
     console.error(error);
     res.status(500).json({ success: false, message: error.message });
