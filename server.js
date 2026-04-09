@@ -1604,6 +1604,12 @@ app.delete('/api/admin/subjects/:subjectId', authenticateToken, authenticateAdmi
 // Get unread notifications for admin
 app.get('/api/admin/notifications', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
+    // Admin user IDs are UUIDs (contain '-'), but notifications.user_id expects an integer.
+    // Admin notifications are not needed, so return empty array immediately.
+    if (typeof req.user.id === 'string' && req.user.id.includes('-')) {
+      return res.json({ success: true, notifications: [] });
+    }
+
     const { data: notifications, error } = await supabase
       .from('notifications')
       .select('*')
@@ -1612,7 +1618,7 @@ app.get('/api/admin/notifications', authenticateToken, authenticateAdmin, async 
       .order('created_at', { ascending: false });
 
     if (error) {
-      console.warn('Notifications table may not exist yet:', error.message);
+      console.warn('Notifications fetch error:', error.message);
       return res.json({ success: true, notifications: [] });
     }
 
