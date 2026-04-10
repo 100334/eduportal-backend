@@ -1359,7 +1359,53 @@ app.delete('/api/admin/audit-logs/clear', authenticateToken, authenticateAdmin, 
   }
 });
 
-// DELETE /api/admin/attempts/:attemptId/reset
+// GET /api/admin/all-submissions - Get all quiz attempts across all quizzes
+app.get('/api/admin/all-submissions', authenticateToken, authenticateAdmin, async (req, res) => {
+  try {
+    const { quiz_id, learner_id, status } = req.query;
+
+    let query = supabase
+      .from('quiz_attempts')
+      .select(`
+        id,
+        learner_id,
+        quiz_id,
+        status,
+        earned_points,
+        total_points,
+        completed_at,
+        started_at,
+        learners:learner_id(id, name, reg_number),
+        quizzes:quiz_id(id, title, subject)
+      `);
+
+    if (quiz_id) query = query.eq('quiz_id', quiz_id);
+    if (learner_id) query = query.eq('learner_id', learner_id);
+    if (status) query = query.eq('status', status);
+
+    const { data, error } = await query.order('completed_at', { ascending: false });
+
+    if (error) throw error;
+
+    const formatted = (data || []).map(attempt => ({
+      id: attempt.id,
+      learner_name: attempt.learners?.name || 'Unknown',
+      learner_reg: attempt.learners?.reg_number || 'N/A',
+      quiz_title: attempt.quizzes?.title || 'Quiz',
+      subject: attempt.quizzes?.subject || 'General',
+      status: attempt.status,
+      earned_marks: attempt.earned_points || 0,
+      total_marks: attempt.total_points || 0,
+      submitted_at: attempt.completed_at,
+      started_at: attempt.started_at
+    }));
+
+    res.json({ success: true, submissions: formatted });
+  } catch (error) {
+    console.error('Error fetching all submissions:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
 // Admin can delete a learner's attempt so they can retake the quiz
 app.delete('/api/admin/attempts/:attemptId/reset', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
@@ -1406,54 +1452,7 @@ app.delete('/api/admin/attempts/:attemptId/reset', authenticateToken, authentica
   }
 });
 
-// GET /api/admin/all-submissions
-// GET /api/admin/all-submissions
-app.get('/api/admin/all-submissions', authenticateToken, authenticateAdmin, async (req, res) => {
-  try {
-    const { quiz_id, learner_id, status } = req.query;
 
-    let query = supabase
-      .from('quiz_attempts')
-      .select(`
-        id,
-        learner_id,
-        quiz_id,
-        status,
-        earned_points,
-        total_points,
-        completed_at,
-        started_at,
-        learners:learner_id(id, name, reg_number),
-        quizzes:quiz_id(id, title, subject)
-      `);
-
-    if (quiz_id) query = query.eq('quiz_id', quiz_id);
-    if (learner_id) query = query.eq('learner_id', learner_id);
-    if (status) query = query.eq('status', status);
-
-    const { data, error } = await query.order('completed_at', { ascending: false });
-
-    if (error) throw error;
-
-    const formatted = (data || []).map(attempt => ({
-      id: attempt.id,
-      learner_name: attempt.learners?.name || 'Unknown',
-      learner_reg: attempt.learners?.reg_number || 'N/A',
-      quiz_title: attempt.quizzes?.title || 'Quiz',
-      subject: attempt.quizzes?.subject || 'General',
-      status: attempt.status,
-      earned_marks: attempt.earned_points || 0,
-      total_marks: attempt.total_points || 0,
-      submitted_at: attempt.completed_at,
-      started_at: attempt.started_at
-    }));
-
-    res.json({ success: true, submissions: formatted });
-  } catch (error) {
-    console.error('Error fetching all submissions:', error);
-    res.status(500).json({ success: false, message: error.message });
-  }
-});;
 // ============================================
 // SUBJECT MANAGEMENT ROUTES
 // ============================================
