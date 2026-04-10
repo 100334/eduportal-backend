@@ -1364,7 +1364,7 @@ app.get('/api/admin/all-submissions', authenticateToken, authenticateAdmin, asyn
   try {
     const { quiz_id, learner_id, status } = req.query;
 
-    // Build base query with proper joins
+    // Build base query – use 'quiz_id' as UUID string
     let query = supabase
       .from('quiz_attempts')
       .select(`
@@ -1373,49 +1373,62 @@ app.get('/api/admin/all-submissions', authenticateToken, authenticateAdmin, asyn
         quiz_id,
         status,
         earned_points,
-        total_marks,
         total_points,
         completed_at,
         started_at,
-        learners:learner_id(id, name, reg_number),
-        quizzes:quiz_id(id, title, subject_id)
+        learners:learner_id(id, name, reg_number)
       `);
 
     if (quiz_id) query = query.eq('quiz_id', quiz_id);
     if (learner_id) query = query.eq('learner_id', learner_id);
     if (status) query = query.eq('status', status);
 
-    const { data, error } = await query.order('completed_at', { ascending: false });
+    const { data: attempts, error } = await query.order('completed_at', { ascending: false });
 
     if (error) throw error;
 
-    // Get all subject names for the fetched quizzes
-    const quizIds = [...new Set((data || []).map(a => a.quiz_id).filter(Boolean))];
-    let subjectMap = {};
+    if (!attempts || attempts.length === 0) {
+      return res.json({ success: true, submissions: [] });
+    }
+
+    // Get all unique quiz IDs
+    const quizIds = [...new Set(attempts.map(a => a.quiz_id).filter(Boolean))];
+    let quizMap = {};
     if (quizIds.length) {
-      const { data: subjectsData, error: subError } = await supabase
-        .from('subjects')
-        .select('id, name')
-        .in('id', quizIds.map(id => id));
-      if (!subError && subjectsData) {
-        subjectMap = Object.fromEntries(subjectsData.map(s => [s.id, s.name]));
+      const { data: quizzes, error: quizErr } = await supabase
+        .from('quizzes')
+        .select('id, title, subject_id')
+        .in('id', quizIds);
+      if (!quizErr && quizzes) {
+        quizMap = Object.fromEntries(quizzes.map(q => [q.id, q]));
       }
     }
 
-    const formatted = (data || []).map(attempt => {
-      // Get subject name either from the joined quizzes.subject (if exists) or from our map
-      let subjectName = subjectMap[attempt.quizzes?.subject_id] || null;
-      if (!subjectName && attempt.quizzes?.subject) subjectName = attempt.quizzes.subject;
-      
-      // Use total_marks if total_points is null/0
-      const totalMarks = attempt.total_points || attempt.total_marks || 0;
+    // Get subject names for those quizzes
+    const subjectIds = [...new Set(Object.values(quizMap).map(q => q.subject_id).filter(Boolean))];
+    let subjectMap = {};
+    if (subjectIds.length) {
+      const { data: subjects, error: subErr } = await supabase
+        .from('subjects')
+        .select('id, name')
+        .in('id', subjectIds);
+      if (!subErr && subjects) {
+        subjectMap = Object.fromEntries(subjects.map(s => [s.id, s.name]));
+      }
+    }
+
+    // Format the submissions
+    const formatted = attempts.map(attempt => {
+      const quiz = quizMap[attempt.quiz_id];
+      const subjectName = quiz?.subject_id ? subjectMap[quiz.subject_id] : null;
+      const totalMarks = attempt.total_points || 0;
       const earnedMarks = attempt.earned_points || 0;
 
       return {
         id: attempt.id,
         learner_name: attempt.learners?.name || 'Unknown',
         learner_reg: attempt.learners?.reg_number || 'N/A',
-        quiz_title: attempt.quizzes?.title || 'Quiz',
+        quiz_title: quiz?.title || 'Quiz',
         subject: subjectName || 'General',
         status: attempt.status,
         earned_marks: earnedMarks,
@@ -1428,7 +1441,11 @@ app.get('/api/admin/all-submissions', authenticateToken, authenticateAdmin, asyn
     res.json({ success: true, submissions: formatted });
   } catch (error) {
     console.error('Error fetching all submissions:', error);
-    res.status(500).json({ success: false, message: error.message });
+    // Send the actual error message in development, but a generic one in production
+    res.status(500).json({ 
+      success: false, 
+      message: process.env.NODE_ENV === 'development' ? error.message : 'Failed to load submissions'
+    });
   }
 });
 
