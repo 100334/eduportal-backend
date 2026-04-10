@@ -1364,6 +1364,7 @@ app.get('/api/admin/all-submissions', authenticateToken, authenticateAdmin, asyn
   try {
     const { quiz_id, learner_id, status } = req.query;
 
+    // Build base query with proper joins
     let query = supabase
       .from('quiz_attempts')
       .select(`
@@ -1372,11 +1373,12 @@ app.get('/api/admin/all-submissions', authenticateToken, authenticateAdmin, asyn
         quiz_id,
         status,
         earned_points,
+        total_marks,
         total_points,
         completed_at,
         started_at,
         learners:learner_id(id, name, reg_number),
-        quizzes:quiz_id(id, title, subject)
+        quizzes:quiz_id(id, title, subject_id)
       `);
 
     if (quiz_id) query = query.eq('quiz_id', quiz_id);
@@ -1387,18 +1389,41 @@ app.get('/api/admin/all-submissions', authenticateToken, authenticateAdmin, asyn
 
     if (error) throw error;
 
-    const formatted = (data || []).map(attempt => ({
-      id: attempt.id,
-      learner_name: attempt.learners?.name || 'Unknown',
-      learner_reg: attempt.learners?.reg_number || 'N/A',
-      quiz_title: attempt.quizzes?.title || 'Quiz',
-      subject: attempt.quizzes?.subject || 'General',
-      status: attempt.status,
-      earned_marks: attempt.earned_points || 0,
-      total_marks: attempt.total_points || 0,
-      submitted_at: attempt.completed_at,
-      started_at: attempt.started_at
-    }));
+    // Get all subject names for the fetched quizzes
+    const quizIds = [...new Set((data || []).map(a => a.quiz_id).filter(Boolean))];
+    let subjectMap = {};
+    if (quizIds.length) {
+      const { data: subjectsData, error: subError } = await supabase
+        .from('subjects')
+        .select('id, name')
+        .in('id', quizIds.map(id => id));
+      if (!subError && subjectsData) {
+        subjectMap = Object.fromEntries(subjectsData.map(s => [s.id, s.name]));
+      }
+    }
+
+    const formatted = (data || []).map(attempt => {
+      // Get subject name either from the joined quizzes.subject (if exists) or from our map
+      let subjectName = subjectMap[attempt.quizzes?.subject_id] || null;
+      if (!subjectName && attempt.quizzes?.subject) subjectName = attempt.quizzes.subject;
+      
+      // Use total_marks if total_points is null/0
+      const totalMarks = attempt.total_points || attempt.total_marks || 0;
+      const earnedMarks = attempt.earned_points || 0;
+
+      return {
+        id: attempt.id,
+        learner_name: attempt.learners?.name || 'Unknown',
+        learner_reg: attempt.learners?.reg_number || 'N/A',
+        quiz_title: attempt.quizzes?.title || 'Quiz',
+        subject: subjectName || 'General',
+        status: attempt.status,
+        earned_marks: earnedMarks,
+        total_marks: totalMarks,
+        submitted_at: attempt.completed_at,
+        started_at: attempt.started_at
+      };
+    });
 
     res.json({ success: true, submissions: formatted });
   } catch (error) {
@@ -1406,6 +1431,7 @@ app.get('/api/admin/all-submissions', authenticateToken, authenticateAdmin, asyn
     res.status(500).json({ success: false, message: error.message });
   }
 });
+
 // Admin can delete a learner's attempt so they can retake the quiz
 app.delete('/api/admin/attempts/:attemptId/reset', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
