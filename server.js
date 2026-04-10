@@ -2476,6 +2476,7 @@ app.get('/api/quiz/quizzes', authenticateToken, async (req, res) => {
     const learnerForm = learner.form;
     console.log(`Learner form: ${learnerForm}`);
 
+    // Fetch active quizzes for the learner's form
     const { data: quizzes, error } = await supabase
       .from('quizzes')
       .select(`
@@ -2491,34 +2492,53 @@ app.get('/api/quiz/quizzes', authenticateToken, async (req, res) => {
       return res.json({ success: true, quizzes: [] });
     }
 
-    const quizzesWithCounts = await Promise.all((quizzes || []).map(async (quiz) => {
+    // Get all attempts made by this learner
+    const { data: attempts, error: attemptsError } = await supabase
+      .from('quiz_attempts')
+      .select('quiz_id, status')
+      .eq('learner_id', req.user.id);
+
+    // Build a map of quiz_id -> status
+    const attemptMap = {};
+    (attempts || []).forEach(att => {
+      attemptMap[att.quiz_id] = att.status;
+    });
+
+    // Enrich each quiz with attempt info and question counts
+    const quizzesWithStatus = await Promise.all((quizzes || []).map(async (quiz) => {
       const { data: questions, error: countError } = await supabase
         .from('quiz_questions')
         .select('marks')
         .eq('quiz_id', quiz.id);
-      
+
       const totalMarks = questions?.reduce((sum, q) => sum + (q.marks || 1), 0) || 0;
-      
+      const status = attemptMap[quiz.id] || null;
+      const alreadyTaken = status !== null;
+      const isCompleted = status === 'completed' || status === 'submitted';
+
       return {
         ...quiz,
         subject_name: quiz.subject?.name,
         question_count: questions?.length || 0,
         total_marks: totalMarks,
-        passing_marks: quiz.passing_points || Math.round(totalMarks * 0.5)
+        passing_marks: quiz.passing_points || Math.round(totalMarks * 0.5),
+        already_taken: alreadyTaken,      // true if any attempt exists
+        attempt_status: status,            // 'in-progress', 'submitted', 'completed', or null
+        disabled: isCompleted              // optional: disable UI if already submitted/completed
       };
     }));
 
     res.json({
       success: true,
-      quizzes: quizzesWithCounts,
+      quizzes: quizzesWithStatus,
       learner_form: learnerForm
     });
   } catch (error) {
     console.error('Error fetching quizzes:', error);
-    res.json({ 
-      success: true, 
+    res.json({
+      success: true,
       quizzes: [],
-      error: error.message 
+      error: error.message
     });
   }
 });
@@ -2620,31 +2640,49 @@ app.get('/api/quiz/:quizId/questions', authenticateToken, async (req, res) => {
 // Start a quiz attempt
 app.post('/api/quiz/:quizId/start', authenticateToken, async (req, res) => {
   try {
-    const quizId = req.params.quizId; // assume it's a UUID string
+    const quizId = req.params.quizId; // UUID string
 
     // 1. Check if the quiz exists
     const { data: quiz, error: quizError } = await supabase
       .from('quizzes')
       .select('subject_id, subject:subject_id(name), total_marks, passing_points')
       .eq('id', quizId)
-      .maybeSingle();  // 👈 returns null if not found
+      .maybeSingle();
 
     if (quizError || !quiz) {
       console.error('Quiz not found:', quizId);
       return res.status(404).json({ success: false, message: 'Quiz not found' });
     }
 
-    // 2. Check for existing attempt
+    // 2. Check for ANY existing attempt (any status)
     const { data: existingAttempt } = await supabase
       .from('quiz_attempts')
-      .select('id')
+      .select('id, status')
       .eq('learner_id', req.user.id)
       .eq('quiz_id', quizId)
-      .eq('status', 'in-progress')
       .maybeSingle();
 
     if (existingAttempt) {
-      return res.json({ success: true, attempt_id: existingAttempt.id, message: 'Resuming...' });
+      // If attempt is in-progress, allow resume
+      if (existingAttempt.status === 'in-progress') {
+        return res.json({ success: true, attempt_id: existingAttempt.id, message: 'Resuming...' });
+      }
+      // If attempt is submitted or completed, reject new attempt
+      if (existingAttempt.status === 'submitted' || existingAttempt.status === 'completed') {
+        return res.status(403).json({
+          success: false,
+          message: 'You have already submitted this quiz. Multiple attempts are not allowed.',
+          attempt_id: existingAttempt.id,
+          status: existingAttempt.status
+        });
+      }
+      // For any other status, reject as well
+      return res.status(403).json({
+        success: false,
+        message: 'You have already attempted this quiz. No further attempts allowed.',
+        attempt_id: existingAttempt.id,
+        status: existingAttempt.status
+      });
     }
 
     // 3. Insert new attempt
@@ -2654,6 +2692,7 @@ app.post('/api/quiz/:quizId/start', authenticateToken, async (req, res) => {
         learner_id: req.user.id,
         quiz_id: quizId,
         total_marks: quiz.total_marks || 0,
+        total_points: quiz.total_marks || 0, // also set total_points to avoid null
         status: 'in-progress',
         started_at: new Date().toISOString(),
         subject_id: quiz.subject_id || null,
