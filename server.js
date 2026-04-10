@@ -1407,6 +1407,7 @@ app.delete('/api/admin/attempts/:attemptId/reset', authenticateToken, authentica
 });
 
 // GET /api/admin/all-submissions
+// GET /api/admin/all-submissions
 app.get('/api/admin/all-submissions', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
     const { quiz_id, learner_id, status } = req.query;
@@ -1449,10 +1450,10 @@ app.get('/api/admin/all-submissions', authenticateToken, authenticateAdmin, asyn
 
     res.json({ success: true, submissions: formatted });
   } catch (error) {
-    console.error(error);
+    console.error('Error fetching all submissions:', error);
     res.status(500).json({ success: false, message: error.message });
   }
-});
+});;
 // ============================================
 // SUBJECT MANAGEMENT ROUTES
 // ============================================
