@@ -3369,16 +3369,38 @@ app.post('/api/quiz/:quizId/verify', authenticateToken, async (req, res) => {
 // ============================================
 
 // GET all subjects (for admin dropdown)
+// GET all subjects (for admin dropdown)
 app.get('/api/admin/subjects/all', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
     const { data: subjects, error } = await supabase
       .from('subjects')
       .select('id, name')
-      .order('name');
-    if (error) throw error;
-    res.json({ success: true, subjects: subjects || [] });
+      .order('name', { ascending: true });
+
+    if (error) {
+      console.error('Supabase error fetching subjects:', error);
+      return res.status(500).json({ 
+        success: false, 
+        message: 'Database error: ' + error.message 
+      });
+    }
+
+    // Ensure we always return an array (even if null)
+    const subjectList = subjects || [];
+    
+    console.log(`✅ Subjects fetched: ${subjectList.length} records`);
+    
+    res.json({ 
+      success: true, 
+      subjects: subjectList,
+      count: subjectList.length 
+    });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    console.error('Unexpected error in /api/admin/subjects/all:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Internal server error: ' + error.message 
+    });
   }
 });
 // GET all lessons (admin)
