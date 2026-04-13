@@ -1789,36 +1789,94 @@ app.put('/api/admin/notifications/:id/read', authenticateToken, authenticateAdmi
 
 app.get('/api/admin/quizzes/:quizId/submissions', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
-    const { quizId } = req.params; // this is the UUID
+    const { quizId } = req.params;   // UUID from frontend
 
-    // Validate UUID format (optional)
+    // Validate UUID format
     const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     if (!uuidRegex.test(quizId)) {
       return res.status(400).json({ success: false, message: 'Invalid quiz ID format. Must be a UUID.' });
     }
 
-    // Step 1: Check if quiz exists using its UUID primary key
+    // Step 1: Verify the quiz exists using its UUID primary key
     const { data: quiz, error: quizError } = await supabase
       .from('quizzes')
-      .select('id, int_id')  // you might still need int_id elsewhere
+      .select('id, int_id')
       .eq('id', quizId)
       .maybeSingle();
 
     if (quizError || !quiz) {
+      console.error('Quiz not found for UUID:', quizId, quizError);
       return res.status(404).json({ success: false, message: 'Quiz not found' });
     }
 
-    // Step 2: Fetch submissions using the UUID (quiz.id)
+    // Step 2: Fetch all submitted (pending) attempts for this quiz using the UUID
     const { data: attempts, error } = await supabase
       .from('quiz_attempts')
       .select('*')
-      .eq('quiz_id', quizId)
-      .eq('status', 'submitted')
+      .eq('quiz_id', quizId)       // UUID column
+      .eq('status', 'submitted')   // only pending submissions
       .order('completed_at', { ascending: false });
 
-    // ... rest of your code unchanged
+    if (error) {
+      console.error('Error fetching attempts:', error);
+      return res.status(500).json({ success: false, message: error.message });
+    }
+
+    if (!attempts || attempts.length === 0) {
+      return res.json({ success: true, submissions: [] });
+    }
+
+    // Get unique learner IDs
+    const learnerIds = [...new Set(attempts.map(a => a.learner_id).filter(Boolean))];
+    let learnerMap = {};
+
+    if (learnerIds.length > 0) {
+      const { data: learners, error: learnerErr } = await supabase
+        .from('learners')
+        .select('id, name, reg_number, form')
+        .in('id', learnerIds);
+      if (!learnerErr && learners) {
+        learnerMap = Object.fromEntries(learners.map(l => [l.id, l]));
+      }
+    }
+
+    // Format submissions for frontend
+    const formatted = attempts.map(attempt => {
+      let answers = attempt.answers;
+      if (typeof answers === 'string') {
+        try { answers = JSON.parse(answers); } catch(e) { answers = []; }
+      }
+      if (!Array.isArray(answers)) answers = [];
+
+      const learner = learnerMap[attempt.learner_id] || { name: 'Unknown', reg_number: 'N/A', form: 'N/A' };
+
+      return {
+        id: attempt.id,
+        quiz_id: quizId,   // include quiz UUID for frontend
+        student_name: learner.name,
+        student_reg: learner.reg_number,
+        student_form: learner.form,
+        earned_marks: attempt.earned_points || 0,
+        total_marks: attempt.total_points || 0,
+        submitted_at: attempt.completed_at,
+        answers: answers.map((ans, idx) => ({
+          question_index: idx,
+          question_id: ans.question_id,
+          question_text: ans.question_text,
+          question_type: ans.question_type,
+          selected_answer_text: ans.selected_answer_text,
+          is_correct: ans.is_correct,
+          given_marks: ans.points_obtained,
+          max_marks: ans.max_points,
+          feedback: ans.feedback || null
+        }))
+      };
+    });
+
+    res.json({ success: true, submissions: formatted });
   } catch (err) {
-    // ...
+    console.error('Submissions endpoint error:', err);
+    res.status(500).json({ success: false, message: err.message });
   }
 });
 
