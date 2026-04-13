@@ -1787,97 +1787,38 @@ app.put('/api/admin/notifications/:id/read', authenticateToken, authenticateAdmi
 // ADMIN QUIZ GRADING ENDPOINTS
 // ============================================
 
-// GET /api/admin/quizzes/:quizId/submissions
 app.get('/api/admin/quizzes/:quizId/submissions', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
-    const { quizId } = req.params;
-    const numericId = parseInt(quizId, 10);
-    if (isNaN(numericId)) {
-      return res.status(400).json({ success: false, message: 'Invalid quiz ID. Must be an integer.' });
+    const { quizId } = req.params; // this is the UUID
+
+    // Validate UUID format (optional)
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!uuidRegex.test(quizId)) {
+      return res.status(400).json({ success: false, message: 'Invalid quiz ID format. Must be a UUID.' });
     }
 
-    // Step 1: Find the UUID of the quiz using its integer int_id
+    // Step 1: Check if quiz exists using its UUID primary key
     const { data: quiz, error: quizError } = await supabase
       .from('quizzes')
-      .select('id')
-      .eq('int_id', numericId)
+      .select('id, int_id')  // you might still need int_id elsewhere
+      .eq('id', quizId)
       .maybeSingle();
 
     if (quizError || !quiz) {
-      console.error('Quiz not found for int_id:', numericId, quizError);
       return res.status(404).json({ success: false, message: 'Quiz not found' });
     }
 
-    const quizUuid = quiz.id;
-    console.log(`📋 Admin fetching pending submissions for quiz int_id=${numericId} (UUID=${quizUuid})`);
-
-    // Step 2: Fetch all submitted (pending) attempts for this quiz using the UUID
+    // Step 2: Fetch submissions using the UUID (quiz.id)
     const { data: attempts, error } = await supabase
       .from('quiz_attempts')
       .select('*')
-      .eq('quiz_id', quizUuid)
-      .eq('status', 'submitted')   // Changed from 'completed' to 'submitted'
+      .eq('quiz_id', quizId)
+      .eq('status', 'submitted')
       .order('completed_at', { ascending: false });
 
-    if (error) {
-      console.error('Error fetching attempts:', error);
-      return res.status(500).json({ success: false, message: error.message });
-    }
-
-    if (!attempts || attempts.length === 0) {
-      return res.json({ success: true, submissions: [] });
-    }
-
-    // Get unique learner IDs
-    const learnerIds = [...new Set(attempts.map(a => a.learner_id).filter(Boolean))];
-    let learnerMap = {};
-
-    if (learnerIds.length > 0) {
-      const { data: learners, error: learnerErr } = await supabase
-        .from('learners')
-        .select('id, name, reg_number, form')
-        .in('id', learnerIds);
-      if (!learnerErr && learners) {
-        learnerMap = Object.fromEntries(learners.map(l => [l.id, l]));
-      }
-    }
-
-    // Format submissions
-    const formatted = attempts.map(attempt => {
-      let answers = attempt.answers;
-      if (typeof answers === 'string') {
-        try { answers = JSON.parse(answers); } catch(e) { answers = []; }
-      }
-      if (!Array.isArray(answers)) answers = [];
-
-      const learner = learnerMap[attempt.learner_id] || { name: 'Unknown', reg_number: 'N/A', form: 'N/A' };
-
-      return {
-        id: attempt.id,
-        student_name: learner.name,
-        student_reg: learner.reg_number,
-        student_form: learner.form,
-        earned_marks: attempt.earned_points || 0,
-        total_marks: attempt.total_points || 0,
-        submitted_at: attempt.completed_at,
-        answers: answers.map((ans, idx) => ({
-          question_index: idx,
-          question_id: ans.question_id,
-          question_text: ans.question_text,
-          question_type: ans.question_type,
-          selected_answer_text: ans.selected_answer_text,
-          is_correct: ans.is_correct,
-          given_marks: ans.points_obtained,
-          max_marks: ans.max_points,
-          feedback: ans.feedback || null
-        }))
-      };
-    });
-
-    res.json({ success: true, submissions: formatted });
+    // ... rest of your code unchanged
   } catch (err) {
-    console.error('Submissions endpoint error:', err);
-    res.status(500).json({ success: false, message: err.message });
+    // ...
   }
 });
 
