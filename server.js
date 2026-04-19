@@ -3406,13 +3406,55 @@ app.get('/api/admin/subjects/all', authenticateToken, authenticateAdmin, async (
 // GET all lessons (admin)
 app.get('/api/admin/lessons', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
+    console.log('📚 Admin fetching all lessons');
+    
+    // Try to fetch lessons with relations
     const { data: lessons, error } = await supabase
       .from('lessons')
-      .select('*, subject:subject_id(id, name), quiz:quiz_id(id, title)')
+      .select('*')
       .order('display_order', { ascending: true });
-    if (error) throw error;
-    res.json({ success: true, lessons: lessons || [] });
+    
+    if (error) {
+      console.error('Error fetching lessons:', error);
+      // If table doesn't exist, return empty array instead of failing
+      if (error.message && error.message.includes('relation') || error.message.includes('does not exist')) {
+        console.log('⚠️ Lessons table may not exist, returning empty array');
+        return res.json({ success: true, lessons: [] });
+      }
+      throw error;
+    }
+    
+    // Fetch subject names separately if needed
+    let enrichedLessons = lessons || [];
+    if (enrichedLessons.length > 0) {
+      // Get all unique subject_ids from lessons
+      const subjectIds = [...new Set(enrichedLessons.filter(l => l.subject_id).map(l => l.subject_id))];
+      
+      if (subjectIds.length > 0) {
+        const { data: subjects } = await supabase
+          .from('subjects')
+          .select('id, name')
+          .in('id', subjectIds);
+        
+        const subjectMap = {};
+        if (subjects) {
+          subjects.forEach(s => {
+            subjectMap[s.id] = s.name;
+          });
+        }
+        
+        // Add subject name to each lesson
+        enrichedLessons = enrichedLessons.map(lesson => ({
+          ...lesson,
+          subject: lesson.subject_id ? { id: lesson.subject_id, name: subjectMap[lesson.subject_id] || 'Unknown' } : null
+        }));
+      }
+    }
+    
+    console.log(`✅ Lessons fetched: ${enrichedLessons.length} records`);
+    res.json({ success: true, lessons: enrichedLessons });
   } catch (error) {
+    console.error('Unexpected error fetching lessons:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 });
