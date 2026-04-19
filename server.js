@@ -2127,7 +2127,32 @@ app.post('/api/admin/quizzes', authenticateToken, authenticateAdmin, async (req,
     }
 
     console.log('✅ Quiz created successfully:', data.id);
-    
+
+    // Notify learners when a new quiz is uploaded and active
+    if (data.is_active) {
+      try {
+        let learnerQuery = supabase.from('learners').select('id, name, form');
+        if (target_form && target_form !== 'All') {
+          learnerQuery = learnerQuery.eq('form', target_form);
+        }
+        const { data: learners, error: learnerError } = await learnerQuery;
+        if (learners && !learnerError && learners.length > 0) {
+          const notifications = learners.map(learner => ({
+            user_id: learner.id,
+            type: 'quiz_uploaded',
+            title: 'New Quiz Available',
+            message: `A new quiz for ${subject.name} has been uploaded${target_form && target_form !== 'All' ? ` for ${target_form}` : ''}.`,
+            related_id: data.id,
+            is_read: false,
+            created_at: new Date().toISOString()
+          }));
+          await supabase.from('notifications').insert(notifications);
+        }
+      } catch (notifyError) {
+        console.error('Failed to notify learners about new quiz:', notifyError);
+      }
+    }
+
     await logAdminAction(
       req.user.id,
       'CREATE_QUIZ',
