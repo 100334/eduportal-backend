@@ -19,6 +19,8 @@ const uploadRoutes = require('./routes/upload');
 -- Add columns to quizzes table
 ALTER TABLE quizzes ADD COLUMN IF NOT EXISTS exam_year INT DEFAULT 2026;
 ALTER TABLE quizzes ADD COLUMN IF NOT EXISTS exam_type VARCHAR(255) DEFAULT 'SCHOOL CERTIFICATE OF EDUCATION MOCK EXAMINATION';
+ALTER TABLE quizzes ADD COLUMN IF NOT EXISTS scheduled_start TIMESTAMP WITH TIME ZONE;
+ALTER TABLE quizzes ADD COLUMN IF NOT EXISTS scheduled_end TIMESTAMP WITH TIME ZONE;
 
 -- Add column to questions table (quiz_questions)
 ALTER TABLE quiz_questions ADD COLUMN IF NOT EXISTS section CHAR(1) DEFAULT 'A';
@@ -2059,15 +2061,15 @@ app.get('/api/admin/quizzes', authenticateToken, authenticateAdmin, async (req, 
   }
 });
 
-// Create a new quiz (admin) - UPDATED to accept exam_year and exam_type
+// Create a new quiz (admin) - UPDATED to accept exam_year, exam_type, scheduled_start, scheduled_end
 app.post('/api/admin/quizzes', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
     const { 
       subject_id, title, description, duration, total_marks, is_active, target_form,
-      section_a_marks, section_b_marks, exam_year, exam_type 
+      section_a_marks, section_b_marks, exam_year, exam_type, scheduled_start, scheduled_end
     } = req.body;
     
-    console.log('📝 Creating new quiz:', { subject_id, title, duration, target_form, exam_year, exam_type });
+    console.log('📝 Creating new quiz:', { subject_id, title, duration, target_form, exam_year, exam_type, scheduled_start, scheduled_end });
     
     if (!subject_id) {
       return res.status(400).json({ 
@@ -2110,6 +2112,8 @@ app.post('/api/admin/quizzes', authenticateToken, authenticateAdmin, async (req,
         target_form: target_form || 'All',
         exam_year: exam_year || new Date().getFullYear(),
         exam_type: exam_type || 'SCHOOL CERTIFICATE OF EDUCATION MOCK EXAMINATION',
+        scheduled_start: scheduled_start || null,
+        scheduled_end: scheduled_end || null,
         created_by: req.user.id,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString()
@@ -2532,7 +2536,7 @@ app.put('/api/admin/quizzes/:quizId', authenticateToken, authenticateAdmin, asyn
     const { quizId } = req.params;
     const { 
       subject_id, title, description, duration, total_marks, is_active, target_form,
-      section_a_marks, section_b_marks, exam_year, exam_type 
+      section_a_marks, section_b_marks, exam_year, exam_type, scheduled_start, scheduled_end
     } = req.body;
     
     const updateData = {};
@@ -2547,6 +2551,8 @@ app.put('/api/admin/quizzes/:quizId', authenticateToken, authenticateAdmin, asyn
     if (target_form !== undefined) updateData.target_form = target_form;
     if (exam_year !== undefined) updateData.exam_year = exam_year;
     if (exam_type !== undefined) updateData.exam_type = exam_type;
+    if (scheduled_start !== undefined) updateData.scheduled_start = scheduled_start;
+    if (scheduled_end !== undefined) updateData.scheduled_end = scheduled_end;
     updateData.updated_at = new Date().toISOString();
     
     const { data: quiz, error } = await supabase
@@ -2659,6 +2665,17 @@ app.get('/api/quiz/quizzes', authenticateToken, async (req, res) => {
       return res.json({ success: true, quizzes: [] });
     }
 
+    // Filter quizzes based on scheduling
+    const now = new Date();
+    const filteredQuizzes = (quizzes || []).filter(quiz => {
+      if (!quiz.scheduled_start && !quiz.scheduled_end) return true; // No scheduling, show
+      const start = quiz.scheduled_start ? new Date(quiz.scheduled_start) : null;
+      const end = quiz.scheduled_end ? new Date(quiz.scheduled_end) : null;
+      if (start && now < start) return false; // Not started yet
+      if (end && now > end) return false; // Already ended
+      return true;
+    });
+
     // Get all attempts made by this learner
     const { data: attempts, error: attemptsError } = await supabase
       .from('quiz_attempts')
@@ -2672,7 +2689,7 @@ app.get('/api/quiz/quizzes', authenticateToken, async (req, res) => {
     });
 
     // Enrich each quiz with attempt info and question counts
-    const quizzesWithStatus = await Promise.all((quizzes || []).map(async (quiz) => {
+    const quizzesWithStatus = await Promise.all((filteredQuizzes || []).map(async (quiz) => {
       const { data: questions, error: countError } = await supabase
         .from('quiz_questions')
         .select('marks')
