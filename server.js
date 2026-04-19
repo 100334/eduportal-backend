@@ -1453,8 +1453,7 @@ app.get('/api/admin/all-submissions', authenticateToken, authenticateAdmin, asyn
 app.delete('/api/admin/attempts/:attemptId/reset', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
     const { attemptId } = req.params;
-    const numericId = parseInt(attemptId, 10);
-    if (isNaN(numericId)) {
+    if (!attemptId || attemptId.trim() === '') {
       return res.status(400).json({ success: false, message: 'Invalid attempt ID' });
     }
 
@@ -1462,7 +1461,7 @@ app.delete('/api/admin/attempts/:attemptId/reset', authenticateToken, authentica
     const { data: attempt, error: fetchError } = await supabase
       .from('quiz_attempts')
       .select('id, learner_id, quiz_id')
-      .eq('id', numericId)
+      .eq('id', attemptId)
       .maybeSingle();
 
     if (fetchError || !attempt) {
@@ -1473,7 +1472,7 @@ app.delete('/api/admin/attempts/:attemptId/reset', authenticateToken, authentica
     const { error: deleteError } = await supabase
       .from('quiz_attempts')
       .delete()
-      .eq('id', numericId);
+      .eq('id', attemptId);
 
     if (deleteError) {
       console.error('Delete attempt error:', deleteError);
@@ -1484,7 +1483,7 @@ app.delete('/api/admin/attempts/:attemptId/reset', authenticateToken, authentica
     await logAdminAction(
       req.user.id,
       'RESET_QUIZ_ATTEMPT',
-      `Reset attempt ID ${numericId} for learner ${attempt.learner_id} on quiz ${attempt.quiz_id}`,
+      `Reset attempt ID ${attemptId} for learner ${attempt.learner_id} on quiz ${attempt.quiz_id}`,
       req.ip
     );
 
