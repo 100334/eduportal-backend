@@ -2665,13 +2665,10 @@ app.get('/api/quiz/quizzes', authenticateToken, async (req, res) => {
       return res.json({ success: true, quizzes: [] });
     }
 
-    // Filter quizzes based on scheduling
+    // Filter quizzes based on scheduling; show upcoming and open quizzes, hide already-expired ones
     const now = new Date();
     const filteredQuizzes = (quizzes || []).filter(quiz => {
-      if (!quiz.scheduled_start && !quiz.scheduled_end) return true; // No scheduling, show
-      const start = quiz.scheduled_start ? new Date(quiz.scheduled_start) : null;
       const end = quiz.scheduled_end ? new Date(quiz.scheduled_end) : null;
-      if (start && now < start) return false; // Not started yet
       if (end && now > end) return false; // Already ended
       return true;
     });
@@ -2699,6 +2696,10 @@ app.get('/api/quiz/quizzes', authenticateToken, async (req, res) => {
       const status = attemptMap[quiz.id] || null;
       const alreadyTaken = status !== null;
       const isCompleted = status === 'completed' || status === 'submitted';
+      const start = quiz.scheduled_start ? new Date(quiz.scheduled_start) : null;
+      const end = quiz.scheduled_end ? new Date(quiz.scheduled_end) : null;
+      const isUpcoming = start && now < start;
+      const isClosed = end && now > end;
 
       return {
         ...quiz,
@@ -2708,7 +2709,11 @@ app.get('/api/quiz/quizzes', authenticateToken, async (req, res) => {
         passing_marks: quiz.passing_points || Math.round(totalMarks * 0.5),
         already_taken: alreadyTaken,      // true if any attempt exists
         attempt_status: status,            // 'in-progress', 'submitted', 'completed', or null
-        disabled: isCompleted              // optional: disable UI if already submitted/completed
+        disabled: isCompleted,              // optional: disable UI if already submitted/completed
+        scheduled_start: quiz.scheduled_start || null,
+        scheduled_end: quiz.scheduled_end || null,
+        quiz_status: isClosed ? 'closed' : isUpcoming ? 'upcoming' : 'open',
+        is_available: !isUpcoming && !isClosed
       };
     }));
 
