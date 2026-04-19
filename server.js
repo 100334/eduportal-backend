@@ -5386,14 +5386,14 @@ app.post('/api/admin/r2-upload-url', authenticateToken, authenticateAdmin, async
 });
 
 // ============================================
-// LEADERBOARD ENDPOINT
+// LEADERBOARD ENDPOINT – BASED ONLY ON REPORT CARDS
 // ============================================
 app.get('/api/learner/leaderboard', authenticateToken, async (req, res) => {
   try {
     const { class_id, form, limit = 10 } = req.query;
     const currentUserId = req.user.id;
 
-    console.log(`🏆 Fetching leaderboard for user: ${currentUserId}, class: ${class_id}, form: ${form}`);
+    console.log(`🏆 Fetching leaderboard (report cards only) for user: ${currentUserId}`);
 
     // Get current learner's info
     const { data: currentLearner, error: learnerError } = await supabase
@@ -5406,7 +5406,7 @@ app.get('/api/learner/leaderboard', authenticateToken, async (req, res) => {
       return res.status(404).json({ success: false, message: 'Learner not found' });
     }
 
-    // Determine which learners to include in leaderboard
+    // Determine which learners to include
     let targetClassId = class_id || currentLearner.class_id;
     let targetForm = form || currentLearner.form;
 
@@ -5417,7 +5417,7 @@ app.get('/api/learner/leaderboard', authenticateToken, async (req, res) => {
       });
     }
 
-    // Get all learners in the target class/form
+    // Get all active, accepted learners in the target class/form
     const { data: learners, error: learnersError } = await supabase
       .from('learners')
       .select('id, name, reg_number, form, class_id')
@@ -5438,70 +5438,35 @@ app.get('/api/learner/leaderboard', authenticateToken, async (req, res) => {
 
     const learnerIds = learners.map(l => l.id);
 
-    // Calculate metrics for each learner
+    // Calculate report card average for each learner
     const leaderboardData = await Promise.all(learners.map(async (learner) => {
-      // 1. Quiz Performance (40% weight)
-      const { data: quizAttempts, error: quizError } = await supabase
-        .from('quiz_attempts')
-        .select('earned_points, total_points, percentage, passed')
-        .eq('learner_id', learner.id)
-        .eq('status', 'completed');
-
-      let quizScore = 0;
-      let quizCount = 0;
-      if (!quizError && quizAttempts && quizAttempts.length > 0) {
-        const totalEarned = quizAttempts.reduce((sum, attempt) => sum + (attempt.earned_points || 0), 0);
-        const totalPossible = quizAttempts.reduce((sum, attempt) => sum + (attempt.total_points || 0), 0);
-        quizScore = totalPossible > 0 ? (totalEarned / totalPossible) * 100 : 0;
-        quizCount = quizAttempts.length;
-      }
-
-      // 2. Report Card Performance (40% weight)
+      // Fetch all completed reports for this learner
       const { data: reports, error: reportsError } = await supabase
         .from('reports')
-        .select('average_score, grade')
+        .select('average_score')
         .eq('learner_id', learner.id);
 
-      let reportScore = 0;
+      let averageScore = 0;
       let reportCount = 0;
+
       if (!reportsError && reports && reports.length > 0) {
         const totalScore = reports.reduce((sum, report) => sum + (report.average_score || 0), 0);
-        reportScore = totalScore / reports.length;
+        averageScore = totalScore / reports.length;
         reportCount = reports.length;
       }
-
-      // 3. Attendance Rate (20% weight)
-      const { data: attendance, error: attendanceError } = await supabase
-        .from('attendance')
-        .select('status')
-        .eq('learner_id', learner.id);
-
-      let attendanceRate = 0;
-      if (!attendanceError && attendance && attendance.length > 0) {
-        const presentCount = attendance.filter(a => a.status === 'present' || a.status === 'late').length;
-        attendanceRate = (presentCount / attendance.length) * 100;
-      }
-
-      // Calculate overall score (weighted average)
-      const overallScore = (quizScore * 0.4) + (reportScore * 0.4) + (attendanceRate * 0.2);
 
       return {
         id: learner.id,
         name: learner.name,
         reg_number: learner.reg_number,
         form: learner.form,
-        quiz_score: Math.round(quizScore * 100) / 100,
-        report_score: Math.round(reportScore * 100) / 100,
-        attendance_rate: Math.round(attendanceRate * 100) / 100,
-        overall_score: Math.round(overallScore * 100) / 100,
-        quiz_count: quizCount,
-        report_count: reportCount,
-        attendance_count: attendance?.length || 0
+        average_score: Math.round(averageScore * 100) / 100,
+        report_count: reportCount
       };
     }));
 
-    // Sort by overall score (descending)
-    leaderboardData.sort((a, b) => b.overall_score - a.overall_score);
+    // Sort by average score (descending)
+    leaderboardData.sort((a, b) => b.average_score - a.average_score);
 
     // Assign ranks
     leaderboardData.forEach((item, index) => {
@@ -5521,7 +5486,8 @@ app.get('/api/learner/leaderboard', authenticateToken, async (req, res) => {
       current_user_rank: currentUserRank,
       total_participants: learners.length,
       class_id: targetClassId,
-      form: targetForm
+      form: targetForm,
+      metric: 'report_card_average'
     });
 
   } catch (error) {
