@@ -2133,11 +2133,16 @@ app.post('/api/admin/quizzes', authenticateToken, authenticateAdmin, async (req,
       try {
         let learnerQuery = supabase.from('learners').select('id, name, form');
         if (target_form && target_form !== 'All') {
-          learnerQuery = learnerQuery.eq('form', target_form);
+          learnerQuery = learnerQuery.ilike('form', `%${target_form}%`);
         }
+
         const { data: learners, error: learnerError } = await learnerQuery;
-        if (learners && !learnerError && learners.length > 0) {
-          const notifications = learners.map(learner => ({
+        if (learnerError) {
+          throw learnerError;
+        }
+
+        if (Array.isArray(learners) && learners.length > 0) {
+          const notifications = learners.map((learner) => ({
             user_id: learner.id,
             type: 'quiz_uploaded',
             title: 'New Quiz Available',
@@ -2147,6 +2152,8 @@ app.post('/api/admin/quizzes', authenticateToken, authenticateAdmin, async (req,
             created_at: new Date().toISOString()
           }));
           await supabase.from('notifications').insert(notifications);
+        } else {
+          console.log('ℹ️ No learners found to notify for quiz upload:', target_form || 'All');
         }
       } catch (notifyError) {
         console.error('Failed to notify learners about new quiz:', notifyError);
@@ -3678,21 +3685,22 @@ app.get('/api/learner/lesson/:lessonId', authenticateToken, async (req, res) => 
 // GET learner notifications (safe version)
 app.get('/api/learner/notifications', authenticateToken, async (req, res) => {
   try {
+    const userId = typeof req.user.id === 'string' ? parseInt(req.user.id, 10) || req.user.id : req.user.id;
     const { data, error } = await supabase
       .from('notifications')
       .select('*')
-      .eq('user_id', req.user.id)  // req.user.id is integer from learners table
+      .eq('user_id', userId)
       .order('created_at', { ascending: false });
 
     if (error) {
       console.error('Notifications fetch error:', error);
-      return res.json({ success: true, notifications: [] });
+      return res.status(500).json({ success: false, message: 'Failed to load notifications.' });
     }
 
     res.json({ success: true, notifications: data || [] });
   } catch (error) {
     console.error('Notifications endpoint error:', error);
-    res.json({ success: true, notifications: [] });
+    res.status(500).json({ success: false, message: 'Failed to load notifications.' });
   }
 });
 
@@ -3700,11 +3708,12 @@ app.get('/api/learner/notifications', authenticateToken, async (req, res) => {
 app.put('/api/learner/notifications/:id/read', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
+    const userId = typeof req.user.id === 'string' ? parseInt(req.user.id, 10) || req.user.id : req.user.id;
     const { error } = await supabase
       .from('notifications')
       .update({ is_read: true, updated_at: new Date().toISOString() })
       .eq('id', id)
-      .eq('user_id', req.user.id);
+      .eq('user_id', userId);
 
     if (error) throw error;
     res.json({ success: true });
