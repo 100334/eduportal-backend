@@ -5487,4 +5487,153 @@ app.listen(PORT, () => {
   console.log('='.repeat(60));
 });
 
+// ============================================
+// LEADERBOARD ENDPOINT
+// ============================================
+app.get('/api/learner/leaderboard', authenticateToken, async (req, res) => {
+  try {
+    const { class_id, form, limit = 10 } = req.query;
+    const currentUserId = req.user.id;
+
+    console.log(`🏆 Fetching leaderboard for user: ${currentUserId}, class: ${class_id}, form: ${form}`);
+
+    // Get current learner's info
+    const { data: currentLearner, error: learnerError } = await supabase
+      .from('learners')
+      .select('id, name, reg_number, form, class_id')
+      .eq('id', currentUserId)
+      .single();
+
+    if (learnerError || !currentLearner) {
+      return res.status(404).json({ success: false, message: 'Learner not found' });
+    }
+
+    // Determine which learners to include in leaderboard
+    let targetClassId = class_id || currentLearner.class_id;
+    let targetForm = form || currentLearner.form;
+
+    if (!targetClassId) {
+      return res.status(400).json({
+        success: false,
+        message: 'No class specified and learner not assigned to a class'
+      });
+    }
+
+    // Get all learners in the target class/form
+    const { data: learners, error: learnersError } = await supabase
+      .from('learners')
+      .select('id, name, reg_number, form, class_id')
+      .eq('class_id', targetClassId)
+      .eq('form', targetForm)
+      .eq('status', 'Active')
+      .eq('is_accepted_by_teacher', true)
+      .order('name', { ascending: true });
+
+    if (learnersError || !learners || learners.length === 0) {
+      return res.json({
+        success: true,
+        leaderboard: [],
+        current_user_rank: null,
+        message: 'No learners found in this class/form'
+      });
+    }
+
+    const learnerIds = learners.map(l => l.id);
+
+    // Calculate metrics for each learner
+    const leaderboardData = await Promise.all(learners.map(async (learner) => {
+      // 1. Quiz Performance (40% weight)
+      const { data: quizAttempts, error: quizError } = await supabase
+        .from('quiz_attempts')
+        .select('earned_points, total_points, percentage, passed')
+        .eq('learner_id', learner.id)
+        .eq('status', 'completed');
+
+      let quizScore = 0;
+      let quizCount = 0;
+      if (!quizError && quizAttempts && quizAttempts.length > 0) {
+        const totalEarned = quizAttempts.reduce((sum, attempt) => sum + (attempt.earned_points || 0), 0);
+        const totalPossible = quizAttempts.reduce((sum, attempt) => sum + (attempt.total_points || 0), 0);
+        quizScore = totalPossible > 0 ? (totalEarned / totalPossible) * 100 : 0;
+        quizCount = quizAttempts.length;
+      }
+
+      // 2. Report Card Performance (40% weight)
+      const { data: reports, error: reportsError } = await supabase
+        .from('reports')
+        .select('average_score, grade')
+        .eq('learner_id', learner.id);
+
+      let reportScore = 0;
+      let reportCount = 0;
+      if (!reportsError && reports && reports.length > 0) {
+        const totalScore = reports.reduce((sum, report) => sum + (report.average_score || 0), 0);
+        reportScore = totalScore / reports.length;
+        reportCount = reports.length;
+      }
+
+      // 3. Attendance Rate (20% weight)
+      const { data: attendance, error: attendanceError } = await supabase
+        .from('attendance')
+        .select('status')
+        .eq('learner_id', learner.id);
+
+      let attendanceRate = 0;
+      if (!attendanceError && attendance && attendance.length > 0) {
+        const presentCount = attendance.filter(a => a.status === 'present' || a.status === 'late').length;
+        attendanceRate = (presentCount / attendance.length) * 100;
+      }
+
+      // Calculate overall score (weighted average)
+      const overallScore = (quizScore * 0.4) + (reportScore * 0.4) + (attendanceRate * 0.2);
+
+      return {
+        id: learner.id,
+        name: learner.name,
+        reg_number: learner.reg_number,
+        form: learner.form,
+        quiz_score: Math.round(quizScore * 100) / 100,
+        report_score: Math.round(reportScore * 100) / 100,
+        attendance_rate: Math.round(attendanceRate * 100) / 100,
+        overall_score: Math.round(overallScore * 100) / 100,
+        quiz_count: quizCount,
+        report_count: reportCount,
+        attendance_count: attendance?.length || 0
+      };
+    }));
+
+    // Sort by overall score (descending)
+    leaderboardData.sort((a, b) => b.overall_score - a.overall_score);
+
+    // Assign ranks
+    leaderboardData.forEach((item, index) => {
+      item.rank = index + 1;
+    });
+
+    // Find current user's rank
+    const currentUserData = leaderboardData.find(item => item.id === currentUserId);
+    const currentUserRank = currentUserData ? currentUserData.rank : null;
+
+    // Limit results if specified
+    const limitedResults = limit && limit > 0 ? leaderboardData.slice(0, parseInt(limit)) : leaderboardData;
+
+    res.json({
+      success: true,
+      leaderboard: limitedResults,
+      current_user_rank: currentUserRank,
+      total_participants: learners.length,
+      class_id: targetClassId,
+      form: targetForm
+    });
+
+  } catch (error) {
+    console.error('Error fetching leaderboard:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch leaderboard',
+      error: error.message
+    });
+  }
+});
+
 module.exports = app;
