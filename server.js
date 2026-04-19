@@ -5384,108 +5384,6 @@ app.post('/api/admin/r2-upload-url', authenticateToken, authenticateAdmin, async
     });
   }
 });
-// ============================================
-// 404 HANDLER
-// ============================================
-app.use((req, res) => {
-  console.log(`❌ Route not found: ${req.method} ${req.path}`);
-  res.status(404).json({ 
-    success: false, 
-    message: `Route not found: ${req.path}`
-  });
-});
-
-// ============================================
-// ERROR HANDLER
-// ============================================
-app.use((err, req, res, next) => {
-  console.error('Server error:', err);
-  res.status(500).json({ 
-    success: false, 
-    message: 'Internal server error',
-    error: process.env.NODE_ENV === 'development' ? err.message : undefined
-  });
-});
-
-// ============================================
-// START SERVER
-// ============================================
-const PORT = process.env.PORT || 3000;
-
-app.listen(PORT, () => {
-  console.log('='.repeat(60));
-  console.log(`✅ Server is running on port ${PORT}`);
-  console.log(`📡 API URL: http://localhost:${PORT}/api`);
-  console.log(`🏥 Health check: http://localhost:${PORT}/health`);
-  console.log('='.repeat(60));
-  
-  console.log('\n📋 Admin API Endpoints:');
-  console.log('   GET    /api/admin/stats');
-  console.log('   GET    /api/admin/teachers');
-  console.log('   POST   /api/admin/teachers');
-  console.log('   PUT    /api/admin/teachers/:id');
-  console.log('   DELETE /api/admin/teachers/:id');
-  console.log('   GET    /api/admin/classes');
-  console.log('   POST   /api/admin/classes');
-  console.log('   PUT    /api/admin/classes/:id');
-  console.log('   DELETE /api/admin/classes/:id');
-  console.log('   GET    /api/admin/learners');
-  console.log('   POST   /api/admin/learners');
-  console.log('   PUT    /api/admin/learners/:id');
-  console.log('   DELETE /api/admin/learners/:id');
-  console.log('   GET    /api/admin/audit-logs');
-  console.log('   DELETE /api/admin/audit-logs/clear');
-  console.log('   GET    /api/admin/subjects/:classId');
-  console.log('   POST   /api/admin/subjects');
-  console.log('   PUT    /api/admin/subjects/:id');
-  console.log('   DELETE /api/admin/subjects/:id');
-  console.log('   GET    /api/admin/quiz-subjects');
-  console.log('   GET    /api/admin/quizzes');
-  console.log('   POST   /api/admin/quizzes');
-  console.log('   PUT    /api/admin/quizzes/:quizId');
-  console.log('   DELETE /api/admin/quizzes/:quizId');
-  console.log('   POST   /api/admin/quizzes/:quizId/questions');
-  console.log('   PUT    /api/admin/quizzes/:quizId/questions/:questionId');   // NEW
-  console.log('   DELETE /api/admin/quizzes/:quizId/questions/:questionId'); // NEW
-  console.log('   GET    /api/admin/quizzes/:quizId/submissions');
-  console.log('   POST   /api/admin/grade');
-  
-  console.log('\n📋 Teacher API Endpoints:');
-  console.log('   GET    /api/teacher/dashboard/stats');
-  console.log('   GET    /api/teacher/all-learners');
-  console.log('   GET    /api/teacher/my-learners');
-  console.log('   POST   /api/teacher/add-learners');
-  console.log('   DELETE /api/teacher/remove-learner/:id');
-  console.log('   GET    /api/teacher/reports');
-  console.log('   POST   /api/teacher/reports');
-  console.log('   PUT    /api/teacher/reports/:id');
-  console.log('   DELETE /api/teacher/reports/:id');
-  console.log('   GET    /api/teacher/attendance');
-  console.log('   POST   /api/teacher/attendance');
-  console.log('   GET    /api/teacher/subjects/:classId');
-  console.log('   GET    /api/teacher/learner-subjects/:learnerId');
-  console.log('   GET    /api/teacher/assessment-types');
-  console.log('   GET    /api/teacher/debug-setup');
-  
-  console.log('\n📋 Learner API Endpoints:');
-  console.log('   GET    /api/learner/profile');
-  console.log('   GET    /api/learner/reports');
-  console.log('   GET    /api/learner/report-card');
-  console.log('   GET    /api/learner/attendance');
-  console.log('   GET    /api/learner/attendance-stats');
-  console.log('   GET    /api/learner/dashboard/stats');
-  
-  console.log('\n📋 Quiz API Endpoints:');
-  console.log('   GET    /api/quiz/ping');
-  console.log('   GET    /api/quiz/quizzes');
-  console.log('   GET    /api/quiz/:quizId/questions');
-  console.log('   POST   /api/quiz/:quizId/start');
-  console.log('   POST   /api/quiz/:quizId/save-answer');
-  console.log('   POST   /api/quiz/:quizId/submit');
-  console.log('   GET    /api/quiz/history');
-  console.log('   POST   /api/quiz/:quizId/verify');
-  console.log('='.repeat(60));
-});
 
 // ============================================
 // LEADERBOARD ENDPOINT
@@ -5635,5 +5533,110 @@ app.get('/api/learner/leaderboard', authenticateToken, async (req, res) => {
     });
   }
 });
+
+
+// ============================================
+// 404 HANDLER
+// ============================================
+app.use((req, res) => {
+  console.log(`❌ Route not found: ${req.method} ${req.path}`);
+  res.status(404).json({ 
+    success: false, 
+    message: `Route not found: ${req.path}`
+  });
+});
+
+// ============================================
+// ERROR HANDLER
+// ============================================
+app.use((err, req, res, next) => {
+  console.error('Server error:', err);
+  res.status(500).json({ 
+    success: false, 
+    message: 'Internal server error',
+    error: process.env.NODE_ENV === 'development' ? err.message : undefined
+  });
+});
+
+// ============================================
+// START SERVER
+// ============================================
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, () => {
+  console.log('='.repeat(60));
+  console.log(`✅ Server is running on port ${PORT}`);
+  console.log(`📡 API URL: http://localhost:${PORT}/api`);
+  console.log(`🏥 Health check: http://localhost:${PORT}/health`);
+  console.log('='.repeat(60));
+  
+  console.log('\n📋 Admin API Endpoints:');
+  console.log('   GET    /api/admin/stats');
+  console.log('   GET    /api/admin/teachers');
+  console.log('   POST   /api/admin/teachers');
+  console.log('   PUT    /api/admin/teachers/:id');
+  console.log('   DELETE /api/admin/teachers/:id');
+  console.log('   GET    /api/admin/classes');
+  console.log('   POST   /api/admin/classes');
+  console.log('   PUT    /api/admin/classes/:id');
+  console.log('   DELETE /api/admin/classes/:id');
+  console.log('   GET    /api/admin/learners');
+  console.log('   POST   /api/admin/learners');
+  console.log('   PUT    /api/admin/learners/:id');
+  console.log('   DELETE /api/admin/learners/:id');
+  console.log('   GET    /api/admin/audit-logs');
+  console.log('   DELETE /api/admin/audit-logs/clear');
+  console.log('   GET    /api/admin/subjects/:classId');
+  console.log('   POST   /api/admin/subjects');
+  console.log('   PUT    /api/admin/subjects/:id');
+  console.log('   DELETE /api/admin/subjects/:id');
+  console.log('   GET    /api/admin/quiz-subjects');
+  console.log('   GET    /api/admin/quizzes');
+  console.log('   POST   /api/admin/quizzes');
+  console.log('   PUT    /api/admin/quizzes/:quizId');
+  console.log('   DELETE /api/admin/quizzes/:quizId');
+  console.log('   POST   /api/admin/quizzes/:quizId/questions');
+  console.log('   PUT    /api/admin/quizzes/:quizId/questions/:questionId');   // NEW
+  console.log('   DELETE /api/admin/quizzes/:quizId/questions/:questionId'); // NEW
+  console.log('   GET    /api/admin/quizzes/:quizId/submissions');
+  console.log('   POST   /api/admin/grade');
+  
+  console.log('\n📋 Teacher API Endpoints:');
+  console.log('   GET    /api/teacher/dashboard/stats');
+  console.log('   GET    /api/teacher/all-learners');
+  console.log('   GET    /api/teacher/my-learners');
+  console.log('   POST   /api/teacher/add-learners');
+  console.log('   DELETE /api/teacher/remove-learner/:id');
+  console.log('   GET    /api/teacher/reports');
+  console.log('   POST   /api/teacher/reports');
+  console.log('   PUT    /api/teacher/reports/:id');
+  console.log('   DELETE /api/teacher/reports/:id');
+  console.log('   GET    /api/teacher/attendance');
+  console.log('   POST   /api/teacher/attendance');
+  console.log('   GET    /api/teacher/subjects/:classId');
+  console.log('   GET    /api/teacher/learner-subjects/:learnerId');
+  console.log('   GET    /api/teacher/assessment-types');
+  console.log('   GET    /api/teacher/debug-setup');
+  
+  console.log('\n📋 Learner API Endpoints:');
+  console.log('   GET    /api/learner/profile');
+  console.log('   GET    /api/learner/reports');
+  console.log('   GET    /api/learner/report-card');
+  console.log('   GET    /api/learner/attendance');
+  console.log('   GET    /api/learner/attendance-stats');
+  console.log('   GET    /api/learner/dashboard/stats');
+  
+  console.log('\n📋 Quiz API Endpoints:');
+  console.log('   GET    /api/quiz/ping');
+  console.log('   GET    /api/quiz/quizzes');
+  console.log('   GET    /api/quiz/:quizId/questions');
+  console.log('   POST   /api/quiz/:quizId/start');
+  console.log('   POST   /api/quiz/:quizId/save-answer');
+  console.log('   POST   /api/quiz/:quizId/submit');
+  console.log('   GET    /api/quiz/history');
+  console.log('   POST   /api/quiz/:quizId/verify');
+  console.log('='.repeat(60));
+});
+
 
 module.exports = app;
