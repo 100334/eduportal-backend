@@ -37,4 +37,6 @@ async function checkClassesAndSubjects() {
   }
 }
 
-checkClassesAndSubjects();
+(async () => {
+  await checkClassesAndSubjects();
+})();
