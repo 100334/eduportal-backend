@@ -1342,7 +1342,7 @@ app.delete('/api/admin/audit-logs/clear', authenticateToken, authenticateAdmin, 
     const { error } = await supabase
       .from('audit_logs')
       .delete()
-      .neq('id', 0);
+      .not('id', 'is', null);
     
     if (error) throw error;
     
