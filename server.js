@@ -4326,7 +4326,20 @@ app.get('/api/teacher/report-drafts', authenticateToken, async (req, res) => {
       .maybeSingle();
 
     if (teacherError) throw teacherError;
-    if (!teacher?.class_id) {
+
+    // Resolve the teacher's class: prefer teacher_classes junction table,
+    // fall back to users.class_id for backwards compatibility.
+    let resolvedClassId = teacher?.class_id || null;
+    if (!resolvedClassId) {
+      const { data: tc } = await supabase
+        .from('teacher_classes')
+        .select('class_id')
+        .eq('teacher_id', req.user.id)
+        .maybeSingle();
+      resolvedClassId = tc?.class_id || null;
+    }
+
+    if (!resolvedClassId) {
       return res.json({ success: true, draft: null, subjects: [] });
     }
 
@@ -4337,7 +4350,7 @@ app.get('/api/teacher/report-drafts', authenticateToken, async (req, res) => {
       .maybeSingle();
 
     if (learnerError) throw learnerError;
-    if (!learner || learner.class_id !== teacher.class_id) {
+    if (!learner || learner.class_id !== resolvedClassId) {
       return res.status(403).json({
         success: false,
         message: 'You do not have permission to access this learner'
@@ -4349,7 +4362,7 @@ app.get('/api/teacher/report-drafts', authenticateToken, async (req, res) => {
       .select('*')
       .eq('teacher_id', req.user.id)
       .eq('learner_id', learner.id)
-      .eq('class_id', teacher.class_id)
+      .eq('class_id', resolvedClassId)
       .eq('academic_year', parseInt(academic_year, 10))
       .eq('term', term)
       .eq('form', form)
