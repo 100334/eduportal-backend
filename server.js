@@ -4246,6 +4246,52 @@ app.delete('/api/teacher/remove-learner/:learnerId', authenticateToken, async (r
   }
 });
 
+async function refreshClassRanking({ classId, term, academicYear, assessmentTypeId }) {
+  if (!classId || !term || !academicYear) return;
+
+  let query = supabase
+    .from('reports')
+    .select('id, learner_id, total_score, average_score')
+    .eq('class_id', classId)
+    .eq('term', term)
+    .eq('academic_year', academicYear);
+
+  if (assessmentTypeId === null || assessmentTypeId === undefined || assessmentTypeId === '') {
+    query = query.is('assessment_type_id', null);
+  } else {
+    query = query.eq('assessment_type_id', assessmentTypeId);
+  }
+
+  const { data: classReports, error } = await query;
+  if (error) throw error;
+  if (!classReports || classReports.length === 0) return;
+
+  const sorted = [...classReports].sort((a, b) => {
+    const aScore = a.total_score !== null && a.total_score !== undefined ? Number(a.total_score) : Number(a.average_score || 0);
+    const bScore = b.total_score !== null && b.total_score !== undefined ? Number(b.total_score) : Number(b.average_score || 0);
+    return bScore - aScore;
+  });
+
+  let currentRank = 1;
+  sorted.forEach((report, index) => {
+    const currentScore = report.total_score !== null && report.total_score !== undefined ? Number(report.total_score) : Number(report.average_score || 0);
+    if (index > 0) {
+      const prevScore = sorted[index - 1].total_score !== null && sorted[index - 1].total_score !== undefined
+        ? Number(sorted[index - 1].total_score)
+        : Number(sorted[index - 1].average_score || 0);
+      if (currentScore !== prevScore) currentRank = index + 1;
+    }
+    report.class_rank = currentRank;
+  });
+
+  await Promise.all(
+    sorted.map(report => supabase
+      .from('reports')
+      .update({ class_rank: report.class_rank })
+      .eq('id', report.id))
+  );
+}
+
 // GET /api/teacher/reports - safe version
 app.get('/api/teacher/reports', authenticateToken, async (req, res) => {
   try {
@@ -4702,30 +4748,12 @@ app.post('/api/teacher/reports', authenticateToken, async (req, res) => {
 
     // ── Compute and store class position for all learners in same class/term/assessment ──
     try {
-      const { data: classReports } = await supabase
-        .from('reports')
-        .select('id, learner_id, average_score')
-        .eq('class_id', learner.class_id)
-        .eq('term', assessmentName)
-        .eq('academic_year', academic_year || new Date().getFullYear())
-        .eq('assessment_type_id', assessment_type_id || null);
-
-      if (classReports && classReports.length > 0) {
-        // Sort descending by average score → higher score = lower (better) position
-        const sorted = [...classReports].sort((a, b) => (b.average_score || 0) - (a.average_score || 0));
-        // Assign positions (tie → same rank)
-        let currentRank = 1;
-        for (let i = 0; i < sorted.length; i++) {
-          if (i > 0 && sorted[i].average_score !== sorted[i - 1].average_score) {
-            currentRank = i + 1;
-          }
-          sorted[i].class_rank = currentRank;
-        }
-        // Batch update all reports in this group with their new rank
-        await Promise.all(sorted.map(r =>
-          supabase.from('reports').update({ class_rank: r.class_rank }).eq('id', r.id)
-        ));
-      }
+      await refreshClassRanking({
+        classId: learner.class_id,
+        term: assessmentName,
+        academicYear: academic_year || new Date().getFullYear(),
+        assessmentTypeId: assessment_type_id || null
+      });
     } catch (rankErr) {
       console.error('Rank update error (non-fatal):', rankErr.message);
     }
@@ -4770,7 +4798,7 @@ app.put('/api/teacher/reports/:id', authenticateToken, async (req, res) => {
     // First, verify the report exists and belongs to this teacher's class
     const { data: existing, error: fetchError } = await supabase
       .from('reports')
-      .select('id, learner_id, class_id')
+      .select('id, learner_id, class_id, term, academic_year, assessment_type_id')
       .eq('id', id)
       .maybeSingle();
 
@@ -4847,6 +4875,17 @@ app.put('/api/teacher/reports/:id', authenticateToken, async (req, res) => {
         success: false,
         message: 'Failed to update report: ' + updateError.message
       });
+    }
+
+    try {
+      await refreshClassRanking({
+        classId: existing.class_id,
+        term: term || existing.term,
+        academicYear: academic_year || existing.academic_year || new Date().getFullYear(),
+        assessmentTypeId: assessment_type_id !== undefined ? assessment_type_id : (existing.assessment_type_id || null)
+      });
+    } catch (rankErr) {
+      console.error('Rank update error (non-fatal):', rankErr.message);
     }
 
     console.log('✅ Report updated successfully:', updatedReport.id);
