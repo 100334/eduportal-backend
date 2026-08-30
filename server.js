@@ -4683,6 +4683,7 @@ app.post('/api/teacher/reports', authenticateToken, async (req, res) => {
         total_score: totalScore,
         grade: grade,
         comment: comment || null,
+        learner_reg_number: learner.reg_number || null,
         generated_by: req.user.id,
         generated_date: new Date().toISOString(),
         created_at: new Date().toISOString(),
@@ -4697,6 +4698,36 @@ app.post('/api/teacher/reports', authenticateToken, async (req, res) => {
         success: false,
         message: 'Failed to save report: ' + error.message
       });
+    }
+
+    // ── Compute and store class position for all learners in same class/term/assessment ──
+    try {
+      const { data: classReports } = await supabase
+        .from('reports')
+        .select('id, learner_id, average_score')
+        .eq('class_id', learner.class_id)
+        .eq('term', assessmentName)
+        .eq('academic_year', academic_year || new Date().getFullYear())
+        .eq('assessment_type_id', assessment_type_id || null);
+
+      if (classReports && classReports.length > 0) {
+        // Sort descending by average score → higher score = lower (better) position
+        const sorted = [...classReports].sort((a, b) => (b.average_score || 0) - (a.average_score || 0));
+        // Assign positions (tie → same rank)
+        let currentRank = 1;
+        for (let i = 0; i < sorted.length; i++) {
+          if (i > 0 && sorted[i].average_score !== sorted[i - 1].average_score) {
+            currentRank = i + 1;
+          }
+          sorted[i].class_rank = currentRank;
+        }
+        // Batch update all reports in this group with their new rank
+        await Promise.all(sorted.map(r =>
+          supabase.from('reports').update({ class_rank: r.class_rank }).eq('id', r.id)
+        ));
+      }
+    } catch (rankErr) {
+      console.error('Rank update error (non-fatal):', rankErr.message);
     }
     
     console.log('✅ Report saved successfully:', newReport.id);
@@ -5537,7 +5568,9 @@ app.get('/api/learner/reports', authenticateToken, async (req, res) => {
         generated_by: report.generated_by,
         generated_date: report.generated_date,
         created_at: report.created_at,
-        updated_at: report.updated_at
+        updated_at: report.updated_at,
+        class_rank: report.class_rank || report.rank || null,
+        learner_reg_number: report.learner_reg_number || learner.reg_number || null
       };
     });
     
@@ -5965,7 +5998,7 @@ app.post('/api/admin/r2-upload-url', authenticateToken, authenticateAdmin, async
 // ============================================
 app.get('/api/learner/leaderboard', authenticateToken, async (req, res) => {
   try {
-    const { class_id, form, limit = 10 } = req.query;
+    const { class_id, form, limit = 10, term, assessment_type_id } = req.query;
     const currentUserId = req.user.id;
 
     console.log(`🏆 Fetching leaderboard (report cards only) for user: ${currentUserId}`);
@@ -6015,19 +6048,32 @@ app.get('/api/learner/leaderboard', authenticateToken, async (req, res) => {
 
     // Calculate report card average for each learner
     const leaderboardData = await Promise.all(learners.map(async (learner) => {
-      // Fetch all completed reports for this learner
-      const { data: reports, error: reportsError } = await supabase
+      // Fetch reports, optionally filtered by term / assessment_type_id
+      let reportsQuery = supabase
         .from('reports')
-        .select('average_score')
+        .select('average_score, total_points')
         .eq('learner_id', learner.id);
 
+      if (term)               reportsQuery = reportsQuery.eq('term', term);
+      if (assessment_type_id) reportsQuery = reportsQuery.eq('assessment_type_id', assessment_type_id);
+
+      const { data: reports, error: reportsError } = await reportsQuery;
+
       let averageScore = 0;
-      let reportCount = 0;
+      let totalPoints  = null;
+      let reportCount  = 0;
 
       if (!reportsError && reports && reports.length > 0) {
-        const totalScore = reports.reduce((sum, report) => sum + (report.average_score || 0), 0);
+        const totalScore = reports.reduce((sum, r) => sum + (r.average_score || 0), 0);
         averageScore = totalScore / reports.length;
-        reportCount = reports.length;
+        reportCount  = reports.length;
+        // For upper form: use aggregate points (lower = better)
+        const hasPoints = reports.some(r => r.total_points != null);
+        if (hasPoints) {
+          totalPoints = Math.round(
+            reports.reduce((sum, r) => sum + (r.total_points || 0), 0) / reports.length
+          );
+        }
       }
 
       return {
@@ -6036,16 +6082,37 @@ app.get('/api/learner/leaderboard', authenticateToken, async (req, res) => {
         reg_number: learner.reg_number,
         form: learner.form,
         average_score: Math.round(averageScore * 100) / 100,
+        total_points: totalPoints,
         report_count: reportCount
       };
     }));
 
-    // Sort by average score (descending)
-    leaderboardData.sort((a, b) => b.average_score - a.average_score);
+    // Sort: upper form → points ascending (lower = better); lower form → score descending
+    const isUpperForm = targetForm === 'Form 3' || targetForm === 'Form 4';
+    const hasPointsData = leaderboardData.some(l => l.total_points != null);
 
-    // Assign ranks
+    if (isUpperForm && hasPointsData) {
+      // Sort by points ascending (1 = Distinction is best); learners without points go to end
+      leaderboardData.sort((a, b) => {
+        if (a.total_points == null) return 1;
+        if (b.total_points == null) return -1;
+        return a.total_points - b.total_points;
+      });
+    } else {
+      leaderboardData.sort((a, b) => b.average_score - a.average_score);
+    }
+
+    // Assign ranks (tied scores share the same rank)
+    let currentRank = 1;
     leaderboardData.forEach((item, index) => {
-      item.rank = index + 1;
+      if (index > 0) {
+        const prev = leaderboardData[index - 1];
+        const sameScore = isUpperForm && hasPointsData
+          ? item.total_points === prev.total_points
+          : item.average_score === prev.average_score;
+        if (!sameScore) currentRank = index + 1;
+      }
+      item.rank = currentRank;
     });
 
     // Find current user's rank
