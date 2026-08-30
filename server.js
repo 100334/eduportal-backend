@@ -4301,6 +4301,292 @@ app.get('/api/teacher/reports', authenticateToken, async (req, res) => {
   }
 });
 
+// Get a saved teacher report draft and its subject scores
+app.get('/api/teacher/report-drafts', authenticateToken, async (req, res) => {
+  try {
+    const {
+      learnerId,
+      term,
+      form,
+      assessment_type_id,
+      academic_year
+    } = req.query;
+
+    if (!learnerId || !term || !form || !academic_year) {
+      return res.status(400).json({
+        success: false,
+        message: 'Learner, term, form, and academic year are required'
+      });
+    }
+
+    const { data: teacher, error: teacherError } = await supabase
+      .from('users')
+      .select('class_id')
+      .eq('id', req.user.id)
+      .maybeSingle();
+
+    if (teacherError) throw teacherError;
+    if (!teacher?.class_id) {
+      return res.json({ success: true, draft: null, subjects: [] });
+    }
+
+    const { data: learner, error: learnerError } = await supabase
+      .from('learners')
+      .select('id, class_id')
+      .eq('id', parseInt(learnerId, 10))
+      .maybeSingle();
+
+    if (learnerError) throw learnerError;
+    if (!learner || learner.class_id !== teacher.class_id) {
+      return res.status(403).json({
+        success: false,
+        message: 'You do not have permission to access this learner'
+      });
+    }
+
+    let draftQuery = supabase
+      .from('teacher_report_drafts')
+      .select('*')
+      .eq('teacher_id', req.user.id)
+      .eq('learner_id', learner.id)
+      .eq('class_id', teacher.class_id)
+      .eq('academic_year', parseInt(academic_year, 10))
+      .eq('term', term)
+      .eq('form', form)
+      .eq('status', 'draft');
+
+    draftQuery = assessment_type_id
+      ? draftQuery.eq('assessment_type_id', assessment_type_id)
+      : draftQuery.is('assessment_type_id', null);
+
+    const { data: draft, error: draftError } = await draftQuery.maybeSingle();
+    if (draftError) throw draftError;
+    if (!draft) return res.json({ success: true, draft: null, subjects: [] });
+
+    const { data: subjects, error: subjectsError } = await supabase
+      .from('teacher_report_draft_subjects')
+      .select('*')
+      .eq('draft_id', draft.id)
+      .order('subject_name', { ascending: true });
+
+    if (subjectsError) throw subjectsError;
+
+    res.json({ success: true, draft, subjects: subjects || [] });
+  } catch (error) {
+    console.error('Error loading teacher report draft:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to load saved grades: ' + error.message
+    });
+  }
+});
+
+// Save or update one subject score in a teacher report draft
+app.post('/api/teacher/report-drafts/subjects', authenticateToken, async (req, res) => {
+  try {
+    const {
+      learnerId,
+      term,
+      form,
+      assessment_type_id,
+      academic_year,
+      comment,
+      subject_name,
+      subject_code,
+      score
+    } = req.body;
+    const parsedLearnerId = parseInt(learnerId, 10);
+    const parsedYear = parseInt(academic_year, 10);
+    const parsedScore = parseInt(score, 10);
+
+    if (!parsedLearnerId || !term || !form || !parsedYear || !subject_name) {
+      return res.status(400).json({
+        success: false,
+        message: 'Learner, term, form, academic year, subject, and score are required'
+      });
+    }
+
+    if (!Number.isInteger(parsedScore) || parsedScore < 0 || parsedScore > 100) {
+      return res.status(400).json({
+        success: false,
+        message: 'Score must be a whole number between 0 and 100'
+      });
+    }
+
+    const { data: teacher, error: teacherError } = await supabase
+      .from('users')
+      .select('class_id')
+      .eq('id', req.user.id)
+      .maybeSingle();
+
+    if (teacherError) throw teacherError;
+    if (!teacher?.class_id) {
+      return res.status(400).json({
+        success: false,
+        message: 'You have not been assigned to a class'
+      });
+    }
+
+    const { data: learner, error: learnerError } = await supabase
+      .from('learners')
+      .select('id, class_id')
+      .eq('id', parsedLearnerId)
+      .maybeSingle();
+
+    if (learnerError) throw learnerError;
+    if (!learner) {
+      return res.status(404).json({ success: false, message: 'Learner not found' });
+    }
+    if (learner.class_id !== teacher.class_id) {
+      return res.status(403).json({
+        success: false,
+        message: 'You do not have permission to save grades for this learner'
+      });
+    }
+
+    let draftQuery = supabase
+      .from('teacher_report_drafts')
+      .select('id')
+      .eq('teacher_id', req.user.id)
+      .eq('learner_id', parsedLearnerId)
+      .eq('class_id', teacher.class_id)
+      .eq('academic_year', parsedYear)
+      .eq('term', term)
+      .eq('form', form)
+      .eq('status', 'draft');
+
+    draftQuery = assessment_type_id
+      ? draftQuery.eq('assessment_type_id', assessment_type_id)
+      : draftQuery.is('assessment_type_id', null);
+
+    const { data: existingDraft, error: draftLookupError } = await draftQuery.maybeSingle();
+    if (draftLookupError) throw draftLookupError;
+
+    let draft = existingDraft;
+    if (draft) {
+      const { data: updatedDraft, error: updateDraftError } = await supabase
+        .from('teacher_report_drafts')
+        .update({ comment: comment || null, updated_at: new Date().toISOString() })
+        .eq('id', draft.id)
+        .select()
+        .single();
+
+      if (updateDraftError) throw updateDraftError;
+      draft = updatedDraft;
+    } else {
+      const { data: newDraft, error: insertDraftError } = await supabase
+        .from('teacher_report_drafts')
+        .insert({
+          teacher_id: req.user.id,
+          learner_id: parsedLearnerId,
+          class_id: teacher.class_id,
+          assessment_type_id: assessment_type_id || null,
+          academic_year: parsedYear,
+          term,
+          form,
+          comment: comment || null,
+          status: 'draft',
+          is_submitted: false
+        })
+        .select()
+        .single();
+
+      if (insertDraftError) throw insertDraftError;
+      draft = newDraft;
+    }
+
+    const { data: existingSubject, error: subjectLookupError } = await supabase
+      .from('teacher_report_draft_subjects')
+      .select('id')
+      .eq('draft_id', draft.id)
+      .eq('subject_name', subject_name)
+      .maybeSingle();
+
+    if (subjectLookupError) throw subjectLookupError;
+
+    let savedSubject;
+    if (existingSubject) {
+      const { data, error } = await supabase
+        .from('teacher_report_draft_subjects')
+        .update({
+          subject_code: subject_code || null,
+          score: parsedScore,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', existingSubject.id)
+        .select()
+        .single();
+
+      if (error) throw error;
+      savedSubject = data;
+    } else {
+      const { data, error } = await supabase
+        .from('teacher_report_draft_subjects')
+        .insert({
+          draft_id: draft.id,
+          subject_name,
+          subject_code: subject_code || null,
+          score: parsedScore
+        })
+        .select()
+        .single();
+
+      if (error) throw error;
+      savedSubject = data;
+    }
+
+    res.json({
+      success: true,
+      message: `${subject_name} saved to database`,
+      draft,
+      subject: savedSubject
+    });
+  } catch (error) {
+    console.error('Error saving teacher report draft subject:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to save grade: ' + error.message
+    });
+  }
+});
+
+// Mark a draft as submitted after the final report is saved
+app.post('/api/teacher/report-drafts/:id/submit', authenticateToken, async (req, res) => {
+  try {
+    const { data: draft, error: draftError } = await supabase
+      .from('teacher_report_drafts')
+      .select('id, teacher_id')
+      .eq('id', req.params.id)
+      .maybeSingle();
+
+    if (draftError) throw draftError;
+    if (!draft || draft.teacher_id !== req.user.id) {
+      return res.status(404).json({ success: false, message: 'Draft not found' });
+    }
+
+    const { data: submittedDraft, error: updateError } = await supabase
+      .from('teacher_report_drafts')
+      .update({
+        status: 'submitted',
+        is_submitted: true,
+        submitted_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', draft.id)
+      .select()
+      .single();
+
+    if (updateError) throw updateError;
+    res.json({ success: true, draft: submittedDraft });
+  } catch (error) {
+    console.error('Error submitting teacher report draft:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to submit saved grades: ' + error.message
+    });
+  }
+});
+
 app.post('/api/teacher/reports', authenticateToken, async (req, res) => {
   try {
     const { learnerId, term, form, subjects, comment, assessment_type_id, academic_year } = req.body;
