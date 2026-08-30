@@ -4433,7 +4433,20 @@ app.post('/api/teacher/report-drafts/subjects', authenticateToken, async (req, r
       .maybeSingle();
 
     if (teacherError) throw teacherError;
-    if (!teacher?.class_id) {
+
+    // Resolve teacher's class — check teacher_classes junction first,
+    // fall back to users.class_id for backwards compatibility.
+    let resolvedClassId = teacher?.class_id || null;
+    if (!resolvedClassId) {
+      const { data: tc } = await supabase
+        .from('teacher_classes')
+        .select('class_id')
+        .eq('teacher_id', req.user.id)
+        .maybeSingle();
+      resolvedClassId = tc?.class_id || null;
+    }
+
+    if (!resolvedClassId) {
       return res.status(400).json({
         success: false,
         message: 'You have not been assigned to a class'
@@ -4450,7 +4463,7 @@ app.post('/api/teacher/report-drafts/subjects', authenticateToken, async (req, r
     if (!learner) {
       return res.status(404).json({ success: false, message: 'Learner not found' });
     }
-    if (learner.class_id !== teacher.class_id) {
+    if (learner.class_id !== resolvedClassId) {
       return res.status(403).json({
         success: false,
         message: 'You do not have permission to save grades for this learner'
@@ -4462,7 +4475,7 @@ app.post('/api/teacher/report-drafts/subjects', authenticateToken, async (req, r
       .select('id')
       .eq('teacher_id', req.user.id)
       .eq('learner_id', parsedLearnerId)
-      .eq('class_id', teacher.class_id)
+      .eq('class_id', resolvedClassId)
       .eq('academic_year', parsedYear)
       .eq('term', term)
       .eq('form', form)
@@ -4492,7 +4505,7 @@ app.post('/api/teacher/report-drafts/subjects', authenticateToken, async (req, r
         .insert({
           teacher_id: req.user.id,
           learner_id: parsedLearnerId,
-          class_id: teacher.class_id,
+          class_id: resolvedClassId,
           assessment_type_id: assessment_type_id || null,
           academic_year: parsedYear,
           term,
