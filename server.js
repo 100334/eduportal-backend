@@ -3857,6 +3857,49 @@ app.get('/api/teacher/all-learners', authenticateToken, async (req, res) => {
   }
 });
 
+app.get('/api/teacher/learners', authenticateToken, async (req, res) => {
+  try {
+    console.log('👥 Fetching learners (legacy route) for teacher:', req.user.id);
+    
+    const { data: teacher, error: teacherError } = await supabase
+      .from('users')
+      .select('class_id')
+      .eq('id', req.user.id)
+      .maybeSingle();
+    
+    if (teacherError) throw teacherError;
+    
+    if (!teacher?.class_id) {
+      return res.json({
+        success: true,
+        learners: []
+      });
+    }
+    
+    const { data: learners, error } = await supabase
+      .from('learners')
+      .select('id, name, reg_number, form, status, class_id')
+      .eq('class_id', teacher.class_id)
+      .eq('is_accepted_by_teacher', true)
+      .eq('status', 'Active')
+      .order('name', { ascending: true });
+    
+    if (error) throw error;
+    
+    res.json({
+      success: true,
+      learners: learners || []
+    });
+    
+  } catch (err) {
+    console.error('Error fetching legacy learners list:', err);
+    res.status(500).json({
+      success: false,
+      message: 'Database error: ' + err.message
+    });
+  }
+});
+
 app.get('/api/teacher/my-learners', authenticateToken, async (req, res) => {
   try {
     console.log('👥 Fetching learners accepted by teacher:', req.user.id);
@@ -3897,6 +3940,110 @@ app.get('/api/teacher/my-learners', authenticateToken, async (req, res) => {
       success: false,
       message: 'Database error: ' + err.message
     });
+  }
+});
+
+app.post('/api/teacher/learners', authenticateToken, async (req, res) => {
+  try {
+    const { learnerIds } = req.body;
+    
+    console.log('📝 Accepting learners via legacy route:', { learnerIds });
+    
+    if (!learnerIds || !Array.isArray(learnerIds) || learnerIds.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please select at least one learner'
+      });
+    }
+    
+    const { data: teacher, error: teacherError } = await supabase
+      .from('users')
+      .select('class_id')
+      .eq('id', req.user.id)
+      .maybeSingle();
+    
+    if (teacherError) throw teacherError;
+    
+    if (!teacher?.class_id) {
+      return res.status(400).json({
+        success: false,
+        message: 'You have not been assigned to a class yet. Please contact administrator.'
+      });
+    }
+    
+    const { data: learnersToAccept, error: checkError } = await supabase
+      .from('learners')
+      .select('id, name')
+      .in('id', learnerIds)
+      .eq('class_id', teacher.class_id)
+      .eq('is_accepted_by_teacher', false);
+    
+    if (checkError) throw checkError;
+    
+    if (learnersToAccept.length !== learnerIds.length) {
+      return res.status(400).json({
+        success: false,
+        message: 'Some learners are not available to accept'
+      });
+    }
+    
+    const { data, error } = await supabase
+      .from('learners')
+      .update({ 
+        is_accepted_by_teacher: true,
+        updated_at: new Date().toISOString() 
+      })
+      .in('id', learnerIds)
+      .select();
+    
+    if (error) throw error;
+    
+    res.json({
+      success: true,
+      message: `${learnerIds.length} learner(s) added to your class`,
+      learners: data
+    });
+    
+  } catch (err) {
+    console.error('Error accepting learners via legacy route:', err);
+    res.status(500).json({
+      success: false,
+      message: 'Database error: ' + err.message
+    });
+  }
+});
+
+app.put('/api/teacher/learners/:learnerId', authenticateToken, async (req, res) => {
+  try {
+    const { learnerId } = req.params;
+    const { class_id, form, status, name, reg_number } = req.body;
+
+    const updateFields = {};
+    if (class_id !== undefined) updateFields.class_id = class_id;
+    if (form !== undefined) updateFields.form = form;
+    if (status !== undefined) updateFields.status = status;
+    if (name !== undefined) updateFields.name = name;
+    if (reg_number !== undefined) updateFields.reg_number = reg_number;
+    updateFields.updated_at = new Date().toISOString();
+
+    const { data: updatedLearner, error } = await supabase
+      .from('learners')
+      .update(updateFields)
+      .eq('id', parseInt(learnerId))
+      .select()
+      .single();
+
+    if (error) {
+      if (error.code === 'PGRST116') {
+        return res.status(404).json({ success: false, message: 'Learner not found' });
+      }
+      throw error;
+    }
+
+    res.json({ success: true, message: 'Learner updated successfully', learner: updatedLearner });
+  } catch (err) {
+    console.error('Error updating learner via legacy route:', err);
+    res.status(500).json({ success: false, message: 'Database error: ' + err.message });
   }
 });
 
@@ -3973,6 +4120,67 @@ app.post('/api/teacher/add-learners', authenticateToken, async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Database error: ' + err.message
+    });
+  }
+});
+
+app.delete('/api/teacher/learners/:learnerId', authenticateToken, async (req, res) => {
+  try {
+    const { learnerId } = req.params;
+    
+    console.log('🗑️ Removing learner from teacher class via legacy route:', learnerId);
+    
+    const { data: teacher, error: teacherError } = await supabase
+      .from('users')
+      .select('class_id')
+      .eq('id', req.user.id)
+      .maybeSingle();
+    
+    if (teacherError) throw teacherError;
+    
+    if (!teacher?.class_id) {
+      return res.status(400).json({
+        success: false,
+        message: 'You have not been assigned to a class yet.'
+      });
+    }
+    
+    const { data: updatedLearner, error } = await supabase
+      .from('learners')
+      .update({ 
+        is_accepted_by_teacher: false,
+        updated_at: new Date().toISOString() 
+      })
+      .eq('id', parseInt(learnerId))
+      .eq('class_id', teacher.class_id)
+      .select();
+    
+    if (error) {
+      console.error('Error updating learner:', error);
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to remove learner: ' + error.message
+      });
+    }
+    
+    if (!updatedLearner || updatedLearner.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Learner not found in your class'
+      });
+    }
+    
+    res.json({
+      success: true,
+      message: `Learner removed from your class and will appear in "Add Learners" list again`,
+      learner: updatedLearner[0]
+    });
+    
+  } catch (err) {
+    console.error('Error removing learner via legacy route:', err);
+    res.status(500).json({
+      success: false,
+      message: 'Server error: ' + err.message
     });
   }
 });
