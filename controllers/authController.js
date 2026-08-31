@@ -286,6 +286,7 @@ exports.learnerLogin = async (req, res, next) => {
       regNumber: learner.reg_number,
       reg_number: learner.reg_number,
       grade: learner.grade,
+      form: learner.grade,   // alias so frontend user.form works
       email: learner.email,
       role: 'learner',
       status: learner.status,
@@ -298,6 +299,8 @@ exports.learnerLogin = async (req, res, next) => {
     if (learner.gender) userObject.gender = learner.gender;
     if (learner.age) userObject.age = learner.age;
     if (learner.enrollment_date) userObject.enrollment_date = learner.enrollment_date;
+    if (learner.guardian_phone) userObject.phone = learner.guardian_phone;
+    if (learner.phone) userObject.phone = learner.phone;
 
     // Log successful login
     console.log('✅ Login response prepared for:', userObject.name);
@@ -532,6 +535,7 @@ exports.getCurrentUser = async (req, res, next) => {
           regNumber: learner.reg_number,
           reg_number: learner.reg_number,
           grade: learner.grade,
+          form: learner.grade,   // alias so frontend user.form works
           email: learner.email,
           role: 'learner',
           status: learner.status,
@@ -542,6 +546,8 @@ exports.getCurrentUser = async (req, res, next) => {
         if (learner.last_name) userData.last_name = learner.last_name;
         if (learner.gender) userData.gender = learner.gender;
         if (learner.age) userData.age = learner.age;
+        if (learner.guardian_phone) userData.phone = learner.guardian_phone;
+        if (learner.phone) userData.phone = learner.phone;
       }
     }
 
