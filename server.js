@@ -23,6 +23,12 @@ ALTER TABLE quizzes ADD COLUMN IF NOT EXISTS scheduled_start TIMESTAMP WITH TIME
 ALTER TABLE quizzes ADD COLUMN IF NOT EXISTS scheduled_end TIMESTAMP WITH TIME ZONE;
 ALTER TABLE quizzes ADD COLUMN IF NOT EXISTS allow_retake BOOLEAN DEFAULT FALSE;
 
+-- Add columns to lessons table
+ALTER TABLE lessons ADD COLUMN IF NOT EXISTS objectives TEXT;
+ALTER TABLE lessons ADD COLUMN IF NOT EXISTS instructions TEXT;
+ALTER TABLE lessons ADD COLUMN IF NOT EXISTS week_number INT DEFAULT 1;
+ALTER TABLE lessons ADD COLUMN IF NOT EXISTS is_weekend_exam BOOLEAN DEFAULT FALSE;
+
 -- Add column to questions table (quiz_questions)
 ALTER TABLE quiz_questions ADD COLUMN IF NOT EXISTS section CHAR(1) DEFAULT 'A';
 */
@@ -3530,7 +3536,7 @@ app.get('/api/admin/lessons', authenticateToken, authenticateAdmin, async (req, 
 // CREATE lesson
 app.post('/api/admin/lessons', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
-    let { title, description, video_url, pdf_url, subject_id, target_form, quiz_id, display_order } = req.body;
+    let { title, description, objectives, instructions, video_url, pdf_url, subject_id, target_form, quiz_id, display_order } = req.body;
     
     if (!title) return res.status(400).json({ success: false, message: 'Title is required' });
     
@@ -3556,6 +3562,8 @@ app.post('/api/admin/lessons', authenticateToken, authenticateAdmin, async (req,
       .insert({
         title,
         description,
+        objectives:    objectives    || null,
+        instructions:  instructions  || null,
         video_url,
         pdf_url,
         subject_id,
@@ -3563,6 +3571,8 @@ app.post('/api/admin/lessons', authenticateToken, authenticateAdmin, async (req,
         quiz_id,
         display_order,
         resource_type,
+        week_number:     parseInt(req.body.week_number)     || 1,
+        is_weekend_exam: !!req.body.is_weekend_exam,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString()
       })
