@@ -21,6 +21,7 @@ ALTER TABLE quizzes ADD COLUMN IF NOT EXISTS exam_year INT DEFAULT 2026;
 ALTER TABLE quizzes ADD COLUMN IF NOT EXISTS exam_type VARCHAR(255) DEFAULT 'SCHOOL CERTIFICATE OF EDUCATION MOCK EXAMINATION';
 ALTER TABLE quizzes ADD COLUMN IF NOT EXISTS scheduled_start TIMESTAMP WITH TIME ZONE;
 ALTER TABLE quizzes ADD COLUMN IF NOT EXISTS scheduled_end TIMESTAMP WITH TIME ZONE;
+ALTER TABLE quizzes ADD COLUMN IF NOT EXISTS allow_retake BOOLEAN DEFAULT FALSE;
 
 -- Add column to questions table (quiz_questions)
 ALTER TABLE quiz_questions ADD COLUMN IF NOT EXISTS section CHAR(1) DEFAULT 'A';
@@ -2707,9 +2708,10 @@ app.get('/api/quiz/quizzes', authenticateToken, async (req, res) => {
         question_count: questions?.length || 0,
         total_marks: totalMarks,
         passing_marks: quiz.passing_points || Math.round(totalMarks * 0.5),
-        already_taken: alreadyTaken,      // true if any attempt exists
-        attempt_status: status,            // 'in-progress', 'submitted', 'completed', or null
-        disabled: isCompleted,              // optional: disable UI if already submitted/completed
+        already_taken: alreadyTaken,
+        attempt_status: status,
+        disabled: isCompleted && !quiz.allow_retake,
+        allow_retake: quiz.allow_retake || false,
         scheduled_start: quiz.scheduled_start || null,
         scheduled_end: quiz.scheduled_end || null,
         quiz_status: isClosed ? 'closed' : isUpcoming ? 'upcoming' : 'open',
@@ -2831,10 +2833,10 @@ app.post('/api/quiz/:quizId/start', authenticateToken, async (req, res) => {
   try {
     const quizId = req.params.quizId; // UUID string
 
-    // 1. Check if the quiz exists
+    // 1. Check if the quiz exists and fetch allow_retake
     const { data: quiz, error: quizError } = await supabase
       .from('quizzes')
-      .select('subject_id, subject:subject_id(name), total_marks, passing_points')
+      .select('subject_id, subject:subject_id(name), total_marks, passing_points, allow_retake')
       .eq('id', quizId)
       .maybeSingle();
 
@@ -2852,26 +2854,37 @@ app.post('/api/quiz/:quizId/start', authenticateToken, async (req, res) => {
       .maybeSingle();
 
     if (existingAttempt) {
-      // If attempt is in-progress, allow resume
+      // Always allow resume of an in-progress attempt
       if (existingAttempt.status === 'in-progress') {
         return res.json({ success: true, attempt_id: existingAttempt.id, message: 'Resuming...' });
       }
-      // If attempt is submitted or completed, reject new attempt
+
+      // Submitted or completed — check allow_retake
       if (existingAttempt.status === 'submitted' || existingAttempt.status === 'completed') {
+        if (quiz.allow_retake) {
+          // Delete the old attempt so a fresh one can be created below
+          await supabase
+            .from('quiz_attempts')
+            .delete()
+            .eq('id', existingAttempt.id);
+          // fall through to insert a new attempt
+        } else {
+          return res.status(403).json({
+            success: false,
+            message: 'You have already submitted this quiz. Multiple attempts are not allowed.',
+            attempt_id: existingAttempt.id,
+            status: existingAttempt.status
+          });
+        }
+      } else {
+        // Any other unexpected status — reject
         return res.status(403).json({
           success: false,
-          message: 'You have already submitted this quiz. Multiple attempts are not allowed.',
+          message: 'You have already attempted this quiz. No further attempts allowed.',
           attempt_id: existingAttempt.id,
           status: existingAttempt.status
         });
       }
-      // For any other status, reject as well
-      return res.status(403).json({
-        success: false,
-        message: 'You have already attempted this quiz. No further attempts allowed.',
-        attempt_id: existingAttempt.id,
-        status: existingAttempt.status
-      });
     }
 
     // 3. Insert new attempt
@@ -2881,7 +2894,7 @@ app.post('/api/quiz/:quizId/start', authenticateToken, async (req, res) => {
         learner_id: req.user.id,
         quiz_id: quizId,
         total_marks: quiz.total_marks || 0,
-        total_points: quiz.total_marks || 0, // also set total_points to avoid null
+        total_points: quiz.total_marks || 0,
         status: 'in-progress',
         started_at: new Date().toISOString(),
         subject_id: quiz.subject_id || null,
@@ -3262,7 +3275,7 @@ app.get('/api/quiz/history', authenticateToken, async (req, res) => {
       try {
         const { data: quiz, error: quizError } = await supabase
           .from('quizzes')
-          .select('id, title, total_marks, passing_points')
+          .select('id, title, total_marks, passing_points, allow_retake')
           .eq('id', attempt.quiz_id)
           .maybeSingle();
 
@@ -3278,7 +3291,8 @@ app.get('/api/quiz/history', authenticateToken, async (req, res) => {
           correct_answers: attempt.score || 0,
           completed_at: attempt.completed_at,
           time_taken: attempt.time_taken,
-          feedback: attempt.feedback || null
+          feedback: attempt.feedback || null,
+          allow_retake: quiz?.allow_retake || false
         });
       } catch (err) {
         console.error('Error fetching quiz details:', err);
@@ -3294,7 +3308,8 @@ app.get('/api/quiz/history', authenticateToken, async (req, res) => {
           correct_answers: attempt.score || 0,
           completed_at: attempt.completed_at,
           time_taken: attempt.time_taken,
-          feedback: attempt.feedback || null
+          feedback: attempt.feedback || null,
+          allow_retake: false
         });
       }
     }
