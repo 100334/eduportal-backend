@@ -3684,15 +3684,15 @@ app.get('/api/learner/lessons', authenticateToken, async (req, res) => {
     if (learnerError) throw learnerError;
     const learnerForm = learner.form;
 
-    // Simple select – no nested relation
-    let query = supabase.from('lessons').select('*');
+    // Join subjects to get subject_name
+    let query = supabase.from('lessons').select('*, subject:subject_id(id, name)');
     if (learnerForm !== 'All') {
       query = query.or(`target_form.eq.All,target_form.eq.${learnerForm}`);
     }
     const { data: lessons, error } = await query.order('display_order', { ascending: true });
     if (error) throw error;
 
-    // Add resource_type if missing (fallback logic)
+    // Add resource_type if missing + flatten subject_name
     const enriched = (lessons || []).map(lesson => {
       let resourceType = lesson.resource_type;
       if (!resourceType) {
@@ -3701,7 +3701,11 @@ app.get('/api/learner/lessons', authenticateToken, async (req, res) => {
         else if (lesson.quiz_id) resourceType = 'quiz';
         else resourceType = 'other';
       }
-      return { ...lesson, resource_type: resourceType };
+      return {
+        ...lesson,
+        resource_type: resourceType,
+        subject_name: lesson.subject?.name || lesson.subject_name || null,
+      };
     });
 
     res.json({ success: true, lessons: enriched });
