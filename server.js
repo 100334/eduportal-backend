@@ -3684,13 +3684,24 @@ app.get('/api/learner/lessons', authenticateToken, async (req, res) => {
     if (learnerError) throw learnerError;
     const learnerForm = learner.form;
 
-    // FK now exists — use Supabase implicit join to get subject name in one query
-    let query = supabase.from('lessons').select('*, subject:subject_id(id, name)');
+    // Manual two-step: fetch lessons then fetch subject names by IDs
+    let query = supabase.from('lessons').select('*');
     if (learnerForm !== 'All') {
       query = query.or(`target_form.eq.All,target_form.eq.${learnerForm}`);
     }
     const { data: lessons, error } = await query.order('display_order', { ascending: true });
     if (error) throw error;
+
+    // Build subject name map
+    const subjectIds = [...new Set((lessons || []).filter(l => l.subject_id).map(l => l.subject_id))];
+    let subjectMap = {};
+    if (subjectIds.length > 0) {
+      const { data: subjects } = await supabase
+        .from('subjects')
+        .select('id, name')
+        .in('id', subjectIds);
+      if (subjects) subjects.forEach(s => { subjectMap[s.id] = s.name; });
+    }
 
     const enriched = (lessons || []).map(lesson => {
       let resourceType = lesson.resource_type;
@@ -3703,7 +3714,7 @@ app.get('/api/learner/lessons', authenticateToken, async (req, res) => {
       return {
         ...lesson,
         resource_type: resourceType,
-        subject_name: lesson.subject?.name || null,
+        subject_name: lesson.subject_id ? (subjectMap[lesson.subject_id] || null) : null,
       };
     });
 
