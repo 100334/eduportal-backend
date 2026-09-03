@@ -3742,6 +3742,126 @@ app.get('/api/learner/lesson/:lessonId', authenticateToken, async (req, res) => 
   }
 });
 
+// ============================================
+// LESSON FEEDBACK / QUESTIONS
+// ============================================
+/*
+  Run once in Supabase SQL Editor:
+
+  CREATE TABLE IF NOT EXISTS lesson_feedback (
+    id          BIGSERIAL PRIMARY KEY,
+    lesson_id   INT          NOT NULL REFERENCES lessons(id) ON DELETE CASCADE,
+    learner_id  INT          NOT NULL,
+    learner_name TEXT,
+    subject     TEXT,
+    lesson_title TEXT,
+    message     TEXT         NOT NULL,
+    is_read     BOOLEAN      DEFAULT FALSE,
+    reply       TEXT,
+    replied_at  TIMESTAMPTZ,
+    created_at  TIMESTAMPTZ  DEFAULT NOW()
+  );
+*/
+
+// POST  /api/learner/lesson-feedback  — learner submits a question/message
+app.post('/api/learner/lesson-feedback', authenticateToken, async (req, res) => {
+  try {
+    const { lesson_id, message, lesson_title, subject } = req.body;
+    if (!lesson_id || !message?.trim()) {
+      return res.status(400).json({ success: false, message: 'lesson_id and message are required' });
+    }
+
+    // Get learner name
+    const { data: learner } = await supabase
+      .from('learners')
+      .select('name')
+      .eq('id', req.user.id)
+      .maybeSingle();
+
+    const { data, error } = await supabase
+      .from('lesson_feedback')
+      .insert({
+        lesson_id:    lesson_id,   // UUID — pass as-is
+        learner_id:   req.user.id,
+        learner_name: learner?.name || 'Unknown',
+        subject:      subject || null,
+        lesson_title: lesson_title || null,
+        message:      message.trim(),
+        is_read:      false,
+        created_at:   new Date().toISOString(),
+      })
+      .select()
+      .single();
+
+    if (error) throw error;
+    res.json({ success: true, feedback: data });
+  } catch (err) {
+    console.error('lesson-feedback POST error:', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// GET  /api/learner/lesson-feedback/:lessonId  — learner's own feedback thread for a lesson
+app.get('/api/learner/lesson-feedback/:lessonId', authenticateToken, async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('lesson_feedback')
+      .select('id, message, reply, replied_at, is_read, created_at')
+      .eq('lesson_id', req.params.lessonId)
+      .eq('learner_id', req.user.id)
+      .order('created_at', { ascending: true });
+
+    if (error) throw error;
+    res.json({ success: true, feedback: data || [] });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// GET  /api/admin/lesson-feedback  — admin gets all feedback (optionally filtered by lesson)
+app.get('/api/admin/lesson-feedback', authenticateToken, authenticateAdmin, async (req, res) => {
+  try {
+    const { lesson_id, unread_only } = req.query;
+    let query = supabase
+      .from('lesson_feedback')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (lesson_id) query = query.eq('lesson_id', lesson_id);
+    if (unread_only === 'true') query = query.eq('is_read', false);
+
+    const { data, error } = await query;
+    if (error) throw error;
+    res.json({ success: true, feedback: data || [] });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// PUT  /api/admin/lesson-feedback/:id/reply  — admin marks read + optionally replies
+app.put('/api/admin/lesson-feedback/:id/reply', authenticateToken, authenticateAdmin, async (req, res) => {
+  try {
+    const { reply } = req.body;
+    const update = {
+      is_read:    true,
+      replied_at: new Date().toISOString(),
+    };
+    if (reply?.trim()) update.reply = reply.trim();
+
+    const { data, error } = await supabase
+      .from('lesson_feedback')
+      .update(update)
+      .eq('id', req.params.id)
+      .select()
+      .single();
+
+    if (error) throw error;
+    res.json({ success: true, feedback: data });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 // GET learner notifications
 // GET learner notifications (safe version)
 app.get('/api/learner/notifications', authenticateToken, async (req, res) => {
