@@ -3685,11 +3685,12 @@ app.get('/api/learner/lessons', authenticateToken, async (req, res) => {
     const learnerForm = learner.form;
 
     // Manual two-step: fetch lessons then fetch subject names by IDs
+    // Use separate .in() instead of .or() — avoids space-in-value parsing issues
     let query = supabase.from('lessons').select('*');
-    if (learnerForm !== 'All') {
-      query = query.or(`target_form.eq.All,target_form.eq.${learnerForm}`);
+    if (learnerForm && learnerForm !== 'All') {
+      query = query.in('target_form', ['All', learnerForm]);
     }
-    const { data: lessons, error } = await query.order('display_order', { ascending: true });
+    const { data: lessons, error } = await query.order('week_number', { ascending: true }).order('display_order', { ascending: true });
     if (error) throw error;
 
     // Build subject name map
@@ -3714,6 +3715,8 @@ app.get('/api/learner/lessons', authenticateToken, async (req, res) => {
       return {
         ...lesson,
         resource_type: resourceType,
+        week_number:   lesson.week_number ?? 1,
+        is_weekend_exam: lesson.is_weekend_exam ?? false,
         subject_name: lesson.subject_id ? (subjectMap[lesson.subject_id] || null) : null,
       };
     });
