@@ -3695,8 +3695,11 @@ app.get('/api/learner/lessons', authenticateToken, async (req, res) => {
     const { data: lessons, error } = await query.order('week_number', { ascending: true }).order('display_order', { ascending: true });
     if (error) throw error;
 
-    // Build subject name map — fetch all subjects, no filter, cast IDs to strings
+    // Build subject name map — fetch all subjects, cast IDs to strings
     const subjectIds = [...new Set((lessons || []).filter(l => l.subject_id != null).map(l => String(l.subject_id)))];
+    console.log('📚 Lessons count:', (lessons || []).length);
+    console.log('📚 Lesson subject_ids found:', subjectIds);
+    console.log('📚 Sample lesson fields:', JSON.stringify((lessons || []).slice(0,2).map(l => ({ id: l.id, title: l.title, subject_id: l.subject_id, week_number: l.week_number, target_form: l.target_form }))));
     let subjectMap = {};
     if (subjectIds.length > 0) {
       const { data: subjects, error: subErr } = await supabase
@@ -3704,9 +3707,9 @@ app.get('/api/learner/lessons', authenticateToken, async (req, res) => {
         .select('id, name');
       if (subErr) console.error('subjects fetch error:', subErr);
       console.log('📚 All subjects in DB:', JSON.stringify(subjects?.map(s => ({ id: s.id, type: typeof s.id, name: s.name }))));
-      console.log('📚 Lesson subject_ids:', subjectIds);
       if (subjects) subjects.forEach(s => { subjectMap[String(s.id)] = s.name; });
-      console.log('📚 subjectMap:', JSON.stringify(subjectMap));
+    } else {
+      console.log('📚 No subject_ids on lessons — subject_id column may be null for all lessons');
     }
 
     const enriched = (lessons || []).map(lesson => {
