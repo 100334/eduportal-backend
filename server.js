@@ -3693,7 +3693,7 @@ app.get('/api/learner/lessons', authenticateToken, async (req, res) => {
     const { data: lessons, error } = await query.order('week_number', { ascending: true }).order('display_order', { ascending: true });
     if (error) throw error;
 
-    // Build subject name map — cast IDs to strings for safe comparison
+    // Build subject name map — fetch all subjects, no filter, cast IDs to strings
     const subjectIds = [...new Set((lessons || []).filter(l => l.subject_id != null).map(l => String(l.subject_id)))];
     let subjectMap = {};
     if (subjectIds.length > 0) {
@@ -3701,7 +3701,10 @@ app.get('/api/learner/lessons', authenticateToken, async (req, res) => {
         .from('subjects')
         .select('id, name');
       if (subErr) console.error('subjects fetch error:', subErr);
+      console.log('📚 All subjects in DB:', JSON.stringify(subjects?.map(s => ({ id: s.id, type: typeof s.id, name: s.name }))));
+      console.log('📚 Lesson subject_ids:', subjectIds);
       if (subjects) subjects.forEach(s => { subjectMap[String(s.id)] = s.name; });
+      console.log('📚 subjectMap:', JSON.stringify(subjectMap));
     }
 
     const enriched = (lessons || []).map(lesson => {
