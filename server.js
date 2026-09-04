@@ -3693,15 +3693,15 @@ app.get('/api/learner/lessons', authenticateToken, async (req, res) => {
     const { data: lessons, error } = await query.order('week_number', { ascending: true }).order('display_order', { ascending: true });
     if (error) throw error;
 
-    // Build subject name map
-    const subjectIds = [...new Set((lessons || []).filter(l => l.subject_id).map(l => l.subject_id))];
+    // Build subject name map — cast IDs to strings for safe comparison
+    const subjectIds = [...new Set((lessons || []).filter(l => l.subject_id != null).map(l => String(l.subject_id)))];
     let subjectMap = {};
     if (subjectIds.length > 0) {
-      const { data: subjects } = await supabase
+      const { data: subjects, error: subErr } = await supabase
         .from('subjects')
-        .select('id, name')
-        .in('id', subjectIds);
-      if (subjects) subjects.forEach(s => { subjectMap[s.id] = s.name; });
+        .select('id, name');
+      if (subErr) console.error('subjects fetch error:', subErr);
+      if (subjects) subjects.forEach(s => { subjectMap[String(s.id)] = s.name; });
     }
 
     const enriched = (lessons || []).map(lesson => {
@@ -3712,12 +3712,15 @@ app.get('/api/learner/lessons', authenticateToken, async (req, res) => {
         else if (lesson.quiz_id) resourceType = 'quiz';
         else resourceType = 'other';
       }
+      const subjectName = lesson.subject_id != null
+        ? (subjectMap[String(lesson.subject_id)] || null)
+        : null;
       return {
         ...lesson,
-        resource_type: resourceType,
-        week_number:   lesson.week_number ?? 1,
+        resource_type:   resourceType,
+        week_number:     lesson.week_number ?? 1,
         is_weekend_exam: lesson.is_weekend_exam ?? false,
-        subject_name: lesson.subject_id ? (subjectMap[lesson.subject_id] || null) : null,
+        subject_name:    subjectName,
       };
     });
 
