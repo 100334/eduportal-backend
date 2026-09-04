@@ -3743,8 +3743,104 @@ app.get('/api/learner/lesson/:lessonId', authenticateToken, async (req, res) => 
 });
 
 // ============================================
-// LESSON FEEDBACK / QUESTIONS
+// AI GRADING (Google Gemini)
 // ============================================
+const { GoogleGenerativeAI } = require('@google/generative-ai');
+
+app.post('/api/admin/ai-grade', authenticateToken, authenticateAdmin, async (req, res) => {
+  try {
+    const { attempt_id } = req.body;
+    if (!attempt_id) return res.status(400).json({ success: false, message: 'Missing attempt_id' });
+
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey || apiKey === 'your_gemini_api_key_here') {
+      return res.status(503).json({ success: false, message: 'GEMINI_API_KEY not configured in server .env' });
+    }
+
+    // Fetch the attempt with answers
+    const { data: attempt, error: fetchErr } = await supabase
+      .from('quiz_attempts')
+      .select('id, answers, total_points, status')
+      .eq('id', attempt_id)
+      .single();
+    if (fetchErr || !attempt) return res.status(404).json({ success: false, message: 'Attempt not found' });
+
+    let answers = attempt.answers;
+    if (typeof answers === 'string') { try { answers = JSON.parse(answers); } catch { answers = []; } }
+    if (!Array.isArray(answers)) answers = [];
+
+    // Only short-answer questions need AI — MCQ is already auto-graded
+    const shortAnswers = answers.filter(a =>
+      a.question_type === 'short_answer' &&
+      a.points_obtained == null &&
+      a.expected_answer
+    );
+
+    if (shortAnswers.length === 0) {
+      return res.json({ success: true, message: 'No short-answer questions to grade', answers });
+    }
+
+    const genAI = new GoogleGenerativeAI(apiKey);
+    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+
+    // Grade each short answer with Gemini
+    const gradedAnswers = [...answers];
+    for (const ans of shortAnswers) {
+      const prompt = `You are a secondary school teacher marking a quiz.
+
+Question: ${ans.question_text}
+Expected answer: ${ans.expected_answer}
+Learner's answer: ${ans.selected_answer_text || ans.answer || '(no answer provided)'}
+Maximum marks: ${ans.max_points}
+
+Award marks (0 to ${ans.max_points}) based on how well the learner's answer matches the expected answer.
+Consider partial credit for partially correct answers.
+Be fair but strict about factual accuracy.
+
+Respond with ONLY valid JSON in this exact format — no extra text:
+{"marks": <number>, "feedback": "<one sentence explaining the marks>"}`;
+
+      try {
+        const result = await model.generateContent(prompt);
+        const text = result.response.text().trim();
+        // Extract JSON even if Gemini adds markdown fences
+        const jsonMatch = text.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          const parsed = JSON.parse(jsonMatch[0]);
+          const marks = Math.min(Math.max(Number(parsed.marks) || 0, 0), ans.max_points);
+          const idx = gradedAnswers.findIndex(a => a.question_id === ans.question_id);
+          if (idx !== -1) {
+            gradedAnswers[idx] = {
+              ...gradedAnswers[idx],
+              points_obtained: marks,
+              is_correct: marks === ans.max_points,
+              feedback: parsed.feedback || null,
+            };
+          }
+        }
+      } catch (aiErr) {
+        console.error('Gemini error for question', ans.question_id, aiErr.message);
+        // Skip this question — leave for manual grading
+      }
+    }
+
+    // Recalculate totals from all answers (including previously graded MCQ)
+    const earned = gradedAnswers.reduce((s, a) => s + (a.points_obtained || 0), 0);
+    const total  = attempt.total_points || 0;
+    const pct    = total > 0 ? (earned / total) * 100 : 0;
+
+    res.json({
+      success: true,
+      answers:       gradedAnswers,
+      earned_points: earned,
+      percentage:    Math.round(pct),
+      message:       `AI graded ${shortAnswers.length} short-answer question${shortAnswers.length !== 1 ? 's' : ''}.`,
+    });
+  } catch (err) {
+    console.error('AI grade error:', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
 /*
   Run once in Supabase SQL Editor:
 
