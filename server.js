@@ -2639,8 +2639,8 @@ app.delete('/api/admin/quizzes/:quizId', authenticateToken, authenticateAdmin, a
 
 // Get all active quizzes for learners (filtered by form)
 app.get('/api/quiz/quizzes', authenticateToken, async (req, res) => {
+  res.set('Cache-Control', 'no-store');
   try {
-    console.log('📚 Fetching quizzes for learner:', req.user.id);
 
     const { data: learner, error: learnerError } = await supabase
       .from('learners')
@@ -3675,6 +3675,8 @@ app.delete('/api/admin/lessons/:id', authenticateToken, authenticateAdmin, async
 // Get all lessons for learner (filtered by form) - with resource_type
 // Get all lessons for learner (filtered by form) - without nested relation
 app.get('/api/learner/lessons', authenticateToken, async (req, res) => {
+  // Disable caching so subject lookups always run fresh
+  res.set('Cache-Control', 'no-store');
   try {
     const { data: learner, error: learnerError } = await supabase
       .from('learners')
