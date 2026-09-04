@@ -3540,11 +3540,11 @@ app.post('/api/admin/lessons', authenticateToken, authenticateAdmin, async (req,
     
     if (!title) return res.status(400).json({ success: false, message: 'Title is required' });
     
-    // Clean foreign keys
-    if (subject_id === '' || subject_id === 'null') subject_id = null;
+    // Clean foreign keys — subject_id is UUID (string), quiz_id is integer
+    if (subject_id === '' || subject_id === 'null' || subject_id === 'undefined') subject_id = null;
     if (quiz_id === '' || quiz_id === 'null') quiz_id = null;
-    
-    if (subject_id !== null) subject_id = parseInt(subject_id);
+
+    // subject_id stays as UUID string — do NOT parseInt
     if (quiz_id !== null) quiz_id = parseInt(quiz_id);
     display_order = parseInt(display_order) || 0;
     
@@ -3596,11 +3596,11 @@ app.put('/api/admin/lessons/:id', authenticateToken, authenticateAdmin, async (r
     const { id } = req.params;
     const updates = { ...req.body };
 
-    // Clean foreign keys
-    if (updates.subject_id === '' || updates.subject_id === 'null') updates.subject_id = null;
+    // Clean foreign keys — subject_id is UUID (string), quiz_id is integer
+    if (updates.subject_id === '' || updates.subject_id === 'null' || updates.subject_id === 'undefined') updates.subject_id = null;
     if (updates.quiz_id === '' || updates.quiz_id === 'null') updates.quiz_id = null;
-    
-    if (updates.subject_id !== null && !isNaN(updates.subject_id)) updates.subject_id = parseInt(updates.subject_id);
+
+    // subject_id stays as UUID string — do NOT parseInt
     if (updates.quiz_id !== null && !isNaN(updates.quiz_id)) updates.quiz_id = parseInt(updates.quiz_id);
     if (updates.display_order !== undefined) updates.display_order = parseInt(updates.display_order) || 0;
 
