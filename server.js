@@ -3845,6 +3845,140 @@ Respond with ONLY valid JSON in this exact format — no extra text:
     res.status(500).json({ success: false, message: err.message });
   }
 });
+
+/*
+  ============================================
+  LESSON PROGRESS TRACKING — run once in Supabase SQL Editor:
+  ============================================
+
+  CREATE TABLE IF NOT EXISTS lesson_progress (
+    id           BIGSERIAL    PRIMARY KEY,
+    lesson_id    UUID         NOT NULL REFERENCES lessons(id) ON DELETE CASCADE,
+    learner_id   INT          NOT NULL,
+    learner_name TEXT,
+    subject_name TEXT,
+    lesson_title TEXT,
+    week_number  INT,
+    step         TEXT         DEFAULT 'intro',   -- 'intro' | 'notes' | 'video' | 'quiz' | 'completed'
+    opened_at    TIMESTAMPTZ  DEFAULT NOW(),
+    last_seen_at TIMESTAMPTZ  DEFAULT NOW(),
+    completed    BOOLEAN      DEFAULT FALSE,
+    UNIQUE (lesson_id, learner_id)
+  );
+*/
+
+// ── LESSON PROGRESS ROUTES ──────────────────────────────────────────────────
+
+// POST /api/learner/lesson-progress — upsert progress when learner opens/advances a lesson
+app.post('/api/learner/lesson-progress', authenticateToken, async (req, res) => {
+  try {
+    const { lesson_id, step, lesson_title, subject_name, week_number } = req.body;
+    if (!lesson_id) return res.status(400).json({ success: false, message: 'lesson_id required' });
+
+    // Get learner name
+    const { data: learner } = await supabase
+      .from('learners')
+      .select('name')
+      .eq('id', req.user.id)
+      .maybeSingle();
+
+    const completed = step === 'completed';
+
+    // Upsert — update step and last_seen_at; only set opened_at on first insert
+    const { data, error } = await supabase
+      .from('lesson_progress')
+      .upsert({
+        lesson_id,
+        learner_id:   req.user.id,
+        learner_name: learner?.name || 'Unknown',
+        subject_name: subject_name || null,
+        lesson_title: lesson_title || null,
+        week_number:  week_number  || null,
+        step:         step || 'intro',
+        last_seen_at: new Date().toISOString(),
+        completed,
+      }, {
+        onConflict: 'lesson_id,learner_id',
+        ignoreDuplicates: false,
+      })
+      .select()
+      .single();
+
+    if (error) throw error;
+    res.json({ success: true, progress: data });
+  } catch (err) {
+    console.error('lesson-progress POST error:', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// GET /api/admin/lesson-progress — all progress records (optionally filtered by lesson_id)
+app.get('/api/admin/lesson-progress', authenticateToken, authenticateAdmin, async (req, res) => {
+  try {
+    const { lesson_id, week_number } = req.query;
+    let query = supabase
+      .from('lesson_progress')
+      .select('*')
+      .order('last_seen_at', { ascending: false });
+
+    if (lesson_id)   query = query.eq('lesson_id', lesson_id);
+    if (week_number) query = query.eq('week_number', parseInt(week_number));
+
+    const { data, error } = await query;
+    if (error) throw error;
+    res.json({ success: true, progress: data || [] });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// GET /api/admin/lesson-progress/summary — per-lesson stats (how many learners viewed each lesson)
+app.get('/api/admin/lesson-progress/summary', authenticateToken, authenticateAdmin, async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('lesson_progress')
+      .select('lesson_id, lesson_title, subject_name, week_number, step, completed, learner_id, learner_name, opened_at, last_seen_at');
+
+    if (error) throw error;
+
+    // Group by lesson
+    const map = {};
+    (data || []).forEach(row => {
+      const key = row.lesson_id;
+      if (!map[key]) {
+        map[key] = {
+          lesson_id:    row.lesson_id,
+          lesson_title: row.lesson_title,
+          subject_name: row.subject_name,
+          week_number:  row.week_number,
+          learners:     [],
+          total:        0,
+          completed:    0,
+        };
+      }
+      map[key].learners.push({
+        learner_id:   row.learner_id,
+        learner_name: row.learner_name,
+        step:         row.step,
+        completed:    row.completed,
+        opened_at:    row.opened_at,
+        last_seen_at: row.last_seen_at,
+      });
+      map[key].total++;
+      if (row.completed) map[key].completed++;
+    });
+
+    const summary = Object.values(map).sort((a, b) => {
+      if (a.week_number !== b.week_number) return (a.week_number || 0) - (b.week_number || 0);
+      return (a.lesson_title || '').localeCompare(b.lesson_title || '');
+    });
+
+    res.json({ success: true, summary });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 /*
   Run once in Supabase SQL Editor:
 
