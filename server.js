@@ -3962,6 +3962,159 @@ app.put('/api/admin/lesson-feedback/:id/reply', authenticateToken, authenticateA
   }
 });
 
+// POST /api/admin/ai-parse-questions — extract structured questions from raw text
+app.post('/api/admin/ai-parse-questions', authenticateToken, authenticateAdmin, async (req, res) => {
+  try {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey || apiKey === 'your_gemini_api_key_here') {
+      return res.status(503).json({ success: false, message: 'GEMINI_API_KEY not configured' });
+    }
+
+    const { text, subject } = req.body;
+    if (!text?.trim()) return res.status(400).json({ success: false, message: 'text is required' });
+
+    const { GoogleGenerativeAI } = require('@google/generative-ai');
+    const genAI = new GoogleGenerativeAI(apiKey);
+    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+
+    const prompt = `You are extracting quiz questions from a document for a secondary school${subject ? ` ${subject}` : ''} quiz.
+
+Extract ALL questions from the text below and return them as a JSON array.
+For multiple choice questions, identify the options and which is correct.
+For short answer / essay questions, include the expected answer if visible.
+
+Rules:
+- Return ONLY a valid JSON array, no markdown, no explanation
+- Each item must have: question_text (string), question_type ("multiple_choice" or "short_answer"), marks (number, default 1), section ("A" or "B", default "A")
+- For multiple_choice also include: options (array of 4 strings), correct_answer (0-3 index)
+- For short_answer also include: expected_answer (string or null)
+- Skip page numbers, headers, instructions — only extract actual questions
+- If you cannot determine the correct answer for MCQ, set correct_answer to 0
+
+Text to parse:
+${text}
+
+Return JSON array only:`;
+
+    const result = await model.generateContent(prompt);
+    const responseText = result.response.text().trim();
+
+    // Extract JSON from response (handle markdown fences)
+    const jsonMatch = responseText.match(/\[[\s\S]*\]/);
+    if (!jsonMatch) {
+      return res.json({ success: false, questions: [], message: 'AI could not structure the questions' });
+    }
+
+    const questions = JSON.parse(jsonMatch[0]);
+    res.json({ success: true, questions });
+  } catch (err) {
+    console.error('AI parse questions error:', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+app.post('/api/admin/lesson-feedback/:id/ai-reply', authenticateToken, authenticateAdmin, async (req, res) => {
+  try {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey || apiKey === 'your_gemini_api_key_here') {
+      return res.status(503).json({ success: false, message: 'GEMINI_API_KEY not configured' });
+    }
+
+    // Fetch the feedback item
+    const { data: item, error: fetchErr } = await supabase
+      .from('lesson_feedback')
+      .select('*')
+      .eq('id', req.params.id)
+      .single();
+    if (fetchErr || !item) return res.status(404).json({ success: false, message: 'Feedback not found' });
+
+    const { GoogleGenerativeAI } = require('@google/generative-ai');
+    const genAI = new GoogleGenerativeAI(apiKey);
+    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+
+    const prompt = `You are a helpful secondary school teacher in Malawi.
+A learner has sent the following question about their lesson.
+
+Lesson: ${item.lesson_title || 'Unknown lesson'}
+Subject: ${item.subject || 'General'}
+Learner's question: ${item.message}
+
+Write a clear, encouraging, and easy-to-understand reply that:
+- Directly answers the question
+- Uses simple language appropriate for a secondary school student
+- Is concise (2-4 sentences maximum)
+- Does not use markdown formatting
+
+Reply only with the answer text, nothing else.`;
+
+    const result = await model.generateContent(prompt);
+    const aiReply = result.response.text().trim();
+
+    res.json({ success: true, reply: aiReply });
+  } catch (err) {
+    console.error('AI reply error:', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// POST /api/admin/quizzes/:quizId/questions/bulk — import questions from JSON array
+app.post('/api/admin/quizzes/:quizId/questions/bulk', authenticateToken, authenticateAdmin, async (req, res) => {
+  try {
+    const { quizId } = req.params;
+    const { questions } = req.body; // array of question objects
+
+    if (!Array.isArray(questions) || questions.length === 0) {
+      return res.status(400).json({ success: false, message: 'questions must be a non-empty array' });
+    }
+
+    // Verify quiz exists
+    const { data: quiz, error: quizErr } = await supabase
+      .from('quizzes')
+      .select('id, total_marks')
+      .eq('id', quizId)
+      .maybeSingle();
+    if (quizErr || !quiz) return res.status(404).json({ success: false, message: 'Quiz not found' });
+
+    // Get current max display_order
+    const { data: existing } = await supabase
+      .from('quiz_questions')
+      .select('display_order')
+      .eq('quiz_id', quizId)
+      .order('display_order', { ascending: false })
+      .limit(1);
+    let nextOrder = (existing?.[0]?.display_order || 0) + 1;
+
+    const toInsert = questions.map((q, i) => ({
+      quiz_id:        quizId,
+      question_text:  (q.question_text || q.question || '').trim(),
+      question_type:  q.question_type || (q.options ? 'multiple_choice' : 'short_answer'),
+      options:        q.options || null,
+      correct_answer: q.correct_answer !== undefined ? parseInt(q.correct_answer) : null,
+      expected_answer: q.expected_answer || q.answer || null,
+      explanation:    q.explanation || null,
+      marks:          parseInt(q.marks) || 1,
+      points:         parseInt(q.marks) || 1,
+      section:        q.section || 'A',
+      display_order:  nextOrder + i,
+      created_at:     new Date().toISOString(),
+    })).filter(q => q.question_text); // skip blank questions
+
+    if (toInsert.length === 0) {
+      return res.status(400).json({ success: false, message: 'No valid questions found in import data' });
+    }
+
+    const { data: inserted, error: insertErr } = await supabase
+      .from('quiz_questions')
+      .insert(toInsert)
+      .select();
+    if (insertErr) throw insertErr;
+
+    res.json({ success: true, inserted: inserted.length, message: `${inserted.length} question${inserted.length !== 1 ? 's' : ''} imported successfully` });
+  } catch (err) {
+    console.error('Bulk import error:', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 // GET learner notifications
 // GET learner notifications (safe version)
 app.get('/api/learner/notifications', authenticateToken, async (req, res) => {
