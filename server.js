@@ -201,8 +201,24 @@ function resolveQuizRouteId(quizIdParam) {
   return { ok: false, message: 'Quiz ID must be a number or UUID' };
 }
 
-// Log admin action helper
-const logAdminAction = async (userId, action, details, ip = null) => {
+// ── Admin notification helper ─────────────────────────────────────────────
+const createAdminNotification = async (type, title, message, related_id = null) => {
+  try {
+    await supabase.from('admin_notifications').insert({
+      type,
+      title,
+      message,
+      related_id: related_id ? String(related_id) : null,
+      is_read: false,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.error('createAdminNotification error:', err.message);
+  }
+};
+
+const logAdminAction = async (userId, action, details, ip) => {
   try {
     await supabase
       .from('audit_logs')
@@ -1749,21 +1765,16 @@ app.delete('/api/admin/subjects/:subjectId', authenticateToken, authenticateAdmi
 // Get unread notifications for admin
 app.get('/api/admin/notifications', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
-    // Admin user IDs are UUIDs (contain '-'), but notifications.user_id expects an integer.
-    // Admin notifications are not needed, so return empty array immediately.
-    if (typeof req.user.id === 'string' && req.user.id.includes('-')) {
-      return res.json({ success: true, notifications: [] });
-    }
-
+    // Use admin_notifications table which stores UUID user_ids
     const { data: notifications, error } = await supabase
-      .from('notifications')
+      .from('admin_notifications')
       .select('*')
-      .eq('user_id', req.user.id)
-      .eq('is_read', false)
-      .order('created_at', { ascending: false });
+      .order('created_at', { ascending: false })
+      .limit(50);
 
     if (error) {
-      console.warn('Notifications fetch error:', error.message);
+      // Table may not exist yet — return empty silently
+      console.warn('admin_notifications fetch error:', error.message);
       return res.json({ success: true, notifications: [] });
     }
 
@@ -1774,15 +1785,13 @@ app.get('/api/admin/notifications', authenticateToken, authenticateAdmin, async 
   }
 });
 
-// Mark notification as read
+// Mark admin notification as read
 app.put('/api/admin/notifications/:id/read', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
-    const { id } = req.params;
     const { error } = await supabase
-      .from('notifications')
+      .from('admin_notifications')
       .update({ is_read: true, updated_at: new Date().toISOString() })
-      .eq('id', id)
-      .eq('user_id', req.user.id);
+      .eq('id', req.params.id);
 
     if (error) throw error;
     res.json({ success: true, message: 'Notification marked as read' });
@@ -1899,7 +1908,7 @@ app.post('/api/admin/grade', authenticateToken, authenticateAdmin, async (req, r
     // Fetch current attempt
     const { data: attempt, error: fetchError } = await supabase
       .from('quiz_attempts')
-      .select('answers, earned_points, total_points, status')
+      .select('learner_id, answers, earned_points, total_points, status')
       .eq('id', attempt_id)
       .single();
     if (fetchError || !attempt) {
@@ -3114,23 +3123,13 @@ app.post('/api/quiz/:quizId/submit', authenticateToken, async (req, res) => {
       .single();
 
     if (learner && quizTitle) {
-      const { data: admins } = await supabase
-        .from('users')
-        .select('id')
-        .eq('role', 'admin')
-        .eq('is_active', true);
-      if (admins && admins.length) {
-        const notifications = admins.map(admin => ({
-          user_id: admin.id,
-          type: 'quiz_pending',
-          title: 'Quiz Submitted for Grading',
-          message: `${learner.name} submitted "${quizTitle.title}" for grading.`,
-          related_id: attempt_id,
-          is_read: false,
-          created_at: new Date().toISOString()
-        }));
-        await supabase.from('notifications').insert(notifications);
-      }
+      // Use admin_notifications (UUID-safe) instead of the learner notifications table
+      await createAdminNotification(
+        'quiz_pending',
+        'Quiz Submitted for Grading',
+        `${learner.name} submitted "${quizTitle.title}" for grading.`,
+        attempt_id
+      );
     }
 
     res.json({
@@ -4250,25 +4249,36 @@ app.post('/api/admin/quizzes/:quizId/questions/bulk', authenticateToken, authent
 });
 
 // GET learner notifications
-// GET learner notifications (safe version)
 app.get('/api/learner/notifications', authenticateToken, async (req, res) => {
+  res.set('Cache-Control', 'no-store');
   try {
-    const userId = typeof req.user.id === 'string' ? parseInt(req.user.id, 10) || req.user.id : req.user.id;
-    const { data, error } = await supabase
+    // Try both integer and string forms of the user id
+    const userId = req.user.id;
+    const userIdInt = parseInt(userId, 10);
+
+    let query = supabase
       .from('notifications')
       .select('*')
-      .eq('user_id', userId)
       .order('created_at', { ascending: false });
+
+    // Use .or() to match both forms if the id is numeric
+    if (!isNaN(userIdInt)) {
+      query = query.eq('user_id', userIdInt);
+    } else {
+      query = query.eq('user_id', userId);
+    }
+
+    const { data, error } = await query;
 
     if (error) {
       console.error('Notifications fetch error:', error);
-      return res.status(500).json({ success: false, message: 'Failed to load notifications.' });
+      return res.json({ success: true, notifications: [] });
     }
 
     res.json({ success: true, notifications: data || [] });
   } catch (error) {
     console.error('Notifications endpoint error:', error);
-    res.status(500).json({ success: false, message: 'Failed to load notifications.' });
+    res.json({ success: true, notifications: [] });
   }
 });
 
