@@ -28,6 +28,7 @@ ALTER TABLE lessons ADD COLUMN IF NOT EXISTS objectives TEXT;
 ALTER TABLE lessons ADD COLUMN IF NOT EXISTS instructions TEXT;
 ALTER TABLE lessons ADD COLUMN IF NOT EXISTS week_number INT DEFAULT 1;
 ALTER TABLE lessons ADD COLUMN IF NOT EXISTS is_weekend_exam BOOLEAN DEFAULT FALSE;
+ALTER TABLE lessons ADD COLUMN IF NOT EXISTS deadline_date DATE;
 
 -- Add column to questions table (quiz_questions)
 ALTER TABLE quiz_questions ADD COLUMN IF NOT EXISTS section CHAR(1) DEFAULT 'A';
@@ -3571,6 +3572,7 @@ app.post('/api/admin/lessons', authenticateToken, authenticateAdmin, async (req,
         display_order,
         resource_type,
         week_number:     parseInt(req.body.week_number)     || 1,
+        deadline_date:   req.body.deadline_date || null,
         is_weekend_exam: !!req.body.is_weekend_exam,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString()
@@ -3581,6 +3583,38 @@ app.post('/api/admin/lessons', authenticateToken, authenticateAdmin, async (req,
     if (error) {
       console.error('Lesson insert error:', error);
       return res.status(500).json({ success: false, message: error.message });
+    }
+
+    // Notify learners who can access the lesson.
+    try {
+      let learnerQuery = supabase.from('learners').select('id');
+      const lessonTargetForm = target_form || 'All';
+      if (lessonTargetForm !== 'All') {
+        learnerQuery = learnerQuery.ilike('form', `%${lessonTargetForm}%`);
+      }
+
+      const { data: learners, error: learnerError } = await learnerQuery;
+      if (learnerError) throw learnerError;
+
+      if (Array.isArray(learners) && learners.length > 0) {
+        const notifications = learners.map((learner) => ({
+          user_id: learner.id,
+          type: 'lesson_uploaded',
+          title: 'New Lesson Available',
+          message: `A new lesson, "${title}", is now available${lessonTargetForm !== 'All' ? ` for ${lessonTargetForm}` : ''}.`,
+          related_id: data.id,
+          is_read: false,
+          created_at: new Date().toISOString()
+        }));
+
+        const { error: notificationError } = await supabase
+          .from('notifications')
+          .insert(notifications);
+        if (notificationError) throw notificationError;
+      }
+    } catch (notificationError) {
+      // A notification failure must not make a successfully uploaded lesson fail.
+      console.error('Failed to notify learners about new lesson:', notificationError);
     }
     
     res.json({ success: true, lesson: data });
