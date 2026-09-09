@@ -3780,18 +3780,18 @@ app.get('/api/learner/lesson/:lessonId', authenticateToken, async (req, res) => 
 });
 
 // ============================================
-// AI GRADING (Google Gemini)
+// AI GRADING (OpenAI)
 // ============================================
-const { GoogleGenerativeAI } = require('@google/generative-ai');
+const OpenAI = require('openai');
 
 app.post('/api/admin/ai-grade', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
     const { attempt_id } = req.body;
     if (!attempt_id) return res.status(400).json({ success: false, message: 'Missing attempt_id' });
 
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey || apiKey === 'your_gemini_api_key_here') {
-      return res.status(503).json({ success: false, message: 'GEMINI_API_KEY not configured in server .env' });
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey || apiKey === 'your_openai_api_key_here') {
+      return res.status(503).json({ success: false, message: 'OPENAI_API_KEY not configured in server .env' });
     }
 
     // Fetch the attempt with answers
@@ -3817,10 +3817,9 @@ app.post('/api/admin/ai-grade', authenticateToken, authenticateAdmin, async (req
       return res.json({ success: true, message: 'No short-answer questions to grade', answers });
     }
 
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+    const openai = new OpenAI({ apiKey });
 
-    // Grade each short answer with Gemini
+    // Grade each short answer with OpenAI
     const gradedAnswers = [...answers];
     for (const ans of shortAnswers) {
       const prompt = `You are a secondary school teacher marking a quiz.
@@ -3838,9 +3837,13 @@ Respond with ONLY valid JSON in this exact format — no extra text:
 {"marks": <number>, "feedback": "<one sentence explaining the marks>"}`;
 
       try {
-        const result = await model.generateContent(prompt);
-        const text = result.response.text().trim();
-        // Extract JSON even if Gemini adds markdown fences
+        const completion = await openai.chat.completions.create({
+          model: 'gpt-4o-mini',
+          messages: [{ role: 'user', content: prompt }],
+          temperature: 0.2,
+        });
+        const text = completion.choices[0]?.message?.content?.trim() || '';
+        // Extract JSON even if the model adds markdown fences
         const jsonMatch = text.match(/\{[\s\S]*\}/);
         if (jsonMatch) {
           const parsed = JSON.parse(jsonMatch[0]);
@@ -3856,7 +3859,7 @@ Respond with ONLY valid JSON in this exact format — no extra text:
           }
         }
       } catch (aiErr) {
-        console.error('Gemini error for question', ans.question_id, aiErr.message);
+        console.error('OpenAI error for question', ans.question_id, aiErr.message);
         // Skip this question — leave for manual grading
       }
     }
@@ -4132,17 +4135,15 @@ app.put('/api/admin/lesson-feedback/:id/reply', authenticateToken, authenticateA
 // POST /api/admin/ai-parse-questions — extract structured questions from raw text
 app.post('/api/admin/ai-parse-questions', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey || apiKey === 'your_gemini_api_key_here') {
-      return res.status(503).json({ success: false, message: 'GEMINI_API_KEY not configured' });
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey || apiKey === 'your_openai_api_key_here') {
+      return res.status(503).json({ success: false, message: 'OPENAI_API_KEY not configured' });
     }
 
     const { text, subject } = req.body;
     if (!text?.trim()) return res.status(400).json({ success: false, message: 'text is required' });
 
-    const { GoogleGenerativeAI } = require('@google/generative-ai');
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+    const openai = new OpenAI({ apiKey });
 
     const prompt = `You are extracting quiz questions from a document for a secondary school${subject ? ` ${subject}` : ''} quiz.
 
@@ -4163,8 +4164,12 @@ ${text}
 
 Return JSON array only:`;
 
-    const result = await model.generateContent(prompt);
-    const responseText = result.response.text().trim();
+    const result = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.2,
+    });
+    const responseText = result.choices[0]?.message?.content?.trim() || '';
 
     // Extract JSON from response (handle markdown fences)
     const jsonMatch = responseText.match(/\[[\s\S]*\]/);
@@ -4181,9 +4186,9 @@ Return JSON array only:`;
 });
 app.post('/api/admin/lesson-feedback/:id/ai-reply', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey || apiKey === 'your_gemini_api_key_here') {
-      return res.status(503).json({ success: false, message: 'GEMINI_API_KEY not configured' });
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey || apiKey === 'your_openai_api_key_here') {
+      return res.status(503).json({ success: false, message: 'OPENAI_API_KEY not configured' });
     }
 
     // Fetch the feedback item
@@ -4194,9 +4199,7 @@ app.post('/api/admin/lesson-feedback/:id/ai-reply', authenticateToken, authentic
       .single();
     if (fetchErr || !item) return res.status(404).json({ success: false, message: 'Feedback not found' });
 
-    const { GoogleGenerativeAI } = require('@google/generative-ai');
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+    const openai = new OpenAI({ apiKey });
 
     const prompt = `You are a helpful secondary school teacher in Malawi.
 A learner has sent the following question about their lesson.
@@ -4213,8 +4216,12 @@ Write a clear, encouraging, and easy-to-understand reply that:
 
 Reply only with the answer text, nothing else.`;
 
-    const result = await model.generateContent(prompt);
-    const aiReply = result.response.text().trim();
+    const result = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.5,
+    });
+    const aiReply = result.choices[0]?.message?.content?.trim() || '';
 
     res.json({ success: true, reply: aiReply });
   } catch (err) {
@@ -5526,6 +5533,85 @@ app.delete('/api/teacher/reports/:reportId', authenticateToken, async (req, res)
       success: false,
       message: 'Database error: ' + err.message
     });
+  }
+});
+
+// GET announcements posted by this teacher
+app.get('/api/teacher/announcements', authenticateToken, async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('announcements')
+      .select('*')
+      .eq('teacher_id', req.user.id)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.error('Fetch announcements error:', error.message);
+      return res.json({ success: true, announcements: [] });
+    }
+
+    res.json({ success: true, announcements: data || [] });
+  } catch (err) {
+    console.error('Announcements endpoint error:', err);
+    res.json({ success: true, announcements: [] });
+  }
+});
+
+// POST a new announcement to learners (teacher's class, or a specific form)
+app.post('/api/teacher/announcements', authenticateToken, async (req, res) => {
+  try {
+    const { title, message, target_form } = req.body || {};
+    if (!title?.trim() || !message?.trim()) {
+      return res.status(400).json({ success: false, message: 'Title and message are required' });
+    }
+
+    const { data: teacher, error: teacherError } = await supabase
+      .from('users')
+      .select('class_id')
+      .eq('id', req.user.id)
+      .maybeSingle();
+    if (teacherError) throw teacherError;
+
+    let learnerQuery = supabase.from('learners').select('id, name, form');
+    if (target_form && target_form !== 'All') {
+      learnerQuery = learnerQuery.ilike('form', `%${target_form}%`);
+    } else if (teacher?.class_id) {
+      learnerQuery = learnerQuery.eq('class_id', teacher.class_id);
+    }
+
+    const { data: learners, error: learnerError } = await learnerQuery;
+    if (learnerError) throw learnerError;
+
+    const { data: announcement, error: insertError } = await supabase
+      .from('announcements')
+      .insert({
+        teacher_id: req.user.id,
+        title: title.trim(),
+        message: message.trim(),
+        target_form: target_form || 'All',
+        created_at: new Date().toISOString()
+      })
+      .select()
+      .single();
+    if (insertError) throw insertError;
+
+    if (Array.isArray(learners) && learners.length > 0) {
+      const notifications = learners.map((learner) => ({
+        user_id: learner.id,
+        type: 'announcement',
+        title: `📢 ${title.trim()}`,
+        message: message.trim(),
+        related_id: announcement.id,
+        is_read: false,
+        created_at: new Date().toISOString()
+      }));
+      await supabase.from('notifications').insert(notifications);
+    }
+
+    res.status(201).json({ success: true, announcement, notified: learners?.length || 0 });
+  } catch (err) {
+    console.error('Post announcement error:', err);
+    res.status(500).json({ success: false, message: err.message || 'Server error' });
   }
 });
 
