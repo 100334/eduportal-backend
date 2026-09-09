@@ -1999,6 +1999,75 @@ app.get('/api/quiz/ping', authenticateToken, (req, res) => {
 });
 
 // Get available subjects for quiz creation (admin)
+// GET all announcements (admin + teacher combined)
+app.get('/api/admin/announcements', authenticateToken, authenticateAdmin, async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('announcements')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.error('Fetch admin announcements error:', error.message);
+      return res.json({ success: true, announcements: [] });
+    }
+
+    res.json({ success: true, announcements: data || [] });
+  } catch (err) {
+    console.error('Admin announcements endpoint error:', err);
+    res.json({ success: true, announcements: [] });
+  }
+});
+
+// POST a new announcement from admin to learners (any form, or all)
+app.post('/api/admin/announcements', authenticateToken, authenticateAdmin, async (req, res) => {
+  try {
+    const { title, message, target_form } = req.body || {};
+    if (!title?.trim() || !message?.trim()) {
+      return res.status(400).json({ success: false, message: 'Title and message are required' });
+    }
+
+    let learnerQuery = supabase.from('learners').select('id, name, form');
+    if (target_form && target_form !== 'All') {
+      learnerQuery = learnerQuery.ilike('form', `%${target_form}%`);
+    }
+
+    const { data: learners, error: learnerError } = await learnerQuery;
+    if (learnerError) throw learnerError;
+
+    const { data: announcement, error: insertError } = await supabase
+      .from('announcements')
+      .insert({
+        teacher_id: req.user.id,
+        title: title.trim(),
+        message: message.trim(),
+        target_form: target_form || 'All',
+        created_at: new Date().toISOString()
+      })
+      .select()
+      .single();
+    if (insertError) throw insertError;
+
+    if (Array.isArray(learners) && learners.length > 0) {
+      const notifications = learners.map((learner) => ({
+        user_id: learner.id,
+        type: 'announcement',
+        title: `📢 ${title.trim()}`,
+        message: message.trim(),
+        related_id: announcement.id,
+        is_read: false,
+        created_at: new Date().toISOString()
+      }));
+      await supabase.from('notifications').insert(notifications);
+    }
+
+    res.status(201).json({ success: true, announcement, notified: learners?.length || 0 });
+  } catch (err) {
+    console.error('Post admin announcement error:', err);
+    res.status(500).json({ success: false, message: err.message || 'Server error' });
+  }
+});
+
 app.get('/api/admin/quiz-subjects', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
     console.log('📚 Fetching available subjects for quizzes');
@@ -4033,6 +4102,35 @@ app.get('/api/admin/lesson-progress/summary', authenticateToken, authenticateAdm
   );
 */
 
+// Helper: generate an AI reply for a lesson_feedback item using OpenAI
+async function generateAiReplyText(item) {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey || apiKey === 'your_openai_api_key_here') return null;
+
+  const openai = new OpenAI({ apiKey });
+  const prompt = `You are a helpful secondary school teacher in Malawi.
+A learner has sent the following question about their lesson.
+
+Lesson: ${item.lesson_title || 'Unknown lesson'}
+Subject: ${item.subject || 'General'}
+Learner's question: ${item.message}
+
+Write a clear, encouraging, and easy-to-understand reply that:
+- Directly answers the question
+- Uses simple language appropriate for a secondary school student
+- Is concise (2-4 sentences maximum)
+- Does not use markdown formatting
+
+Reply only with the answer text, nothing else.`;
+
+  const result = await openai.chat.completions.create({
+    model: 'gpt-4o-mini',
+    messages: [{ role: 'user', content: prompt }],
+    temperature: 0.5,
+  });
+  return result.choices[0]?.message?.content?.trim() || null;
+}
+
 // POST  /api/learner/lesson-feedback  — learner submits a question/message
 app.post('/api/learner/lesson-feedback', authenticateToken, async (req, res) => {
   try {
@@ -4064,7 +4162,26 @@ app.post('/api/learner/lesson-feedback', authenticateToken, async (req, res) => 
       .single();
 
     if (error) throw error;
-    res.json({ success: true, feedback: data });
+
+    // Automatically generate and save an AI reply — no admin action required.
+    // This runs best-effort: if it fails, the feedback is still saved for manual reply.
+    let feedbackWithReply = data;
+    try {
+      const aiReply = await generateAiReplyText(data);
+      if (aiReply) {
+        const { data: updated, error: updateErr } = await supabase
+          .from('lesson_feedback')
+          .update({ reply: aiReply, replied_at: new Date().toISOString() })
+          .eq('id', data.id)
+          .select()
+          .single();
+        if (!updateErr && updated) feedbackWithReply = updated;
+      }
+    } catch (aiErr) {
+      console.error('Auto AI reply failed for feedback', data.id, aiErr.message);
+    }
+
+    res.json({ success: true, feedback: feedbackWithReply });
   } catch (err) {
     console.error('lesson-feedback POST error:', err);
     res.status(500).json({ success: false, message: err.message });
@@ -4199,29 +4316,8 @@ app.post('/api/admin/lesson-feedback/:id/ai-reply', authenticateToken, authentic
       .single();
     if (fetchErr || !item) return res.status(404).json({ success: false, message: 'Feedback not found' });
 
-    const openai = new OpenAI({ apiKey });
-
-    const prompt = `You are a helpful secondary school teacher in Malawi.
-A learner has sent the following question about their lesson.
-
-Lesson: ${item.lesson_title || 'Unknown lesson'}
-Subject: ${item.subject || 'General'}
-Learner's question: ${item.message}
-
-Write a clear, encouraging, and easy-to-understand reply that:
-- Directly answers the question
-- Uses simple language appropriate for a secondary school student
-- Is concise (2-4 sentences maximum)
-- Does not use markdown formatting
-
-Reply only with the answer text, nothing else.`;
-
-    const result = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [{ role: 'user', content: prompt }],
-      temperature: 0.5,
-    });
-    const aiReply = result.choices[0]?.message?.content?.trim() || '';
+    const aiReply = await generateAiReplyText(item);
+    if (!aiReply) return res.status(503).json({ success: false, message: 'AI reply generation failed' });
 
     res.json({ success: true, reply: aiReply });
   } catch (err) {
