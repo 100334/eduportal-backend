@@ -2074,7 +2074,7 @@ app.get('/api/admin/quiz-subjects', authenticateToken, authenticateAdmin, async 
     
     const { data: subjects, error } = await supabase
       .from('subjects')
-      .select('id, name, code, description')
+      .select('id, name, code, description, class_id')
       .eq('status', 'Active')
       .order('name', { ascending: true });
     
@@ -3576,21 +3576,37 @@ app.get('/api/admin/lessons', authenticateToken, authenticateAdmin, async (req, 
       if (subjectIds.length > 0) {
         const { data: subjects } = await supabase
           .from('subjects')
-          .select('id, name')
+          .select('id, name, class_id')
           .in('id', subjectIds);
-        
+
+        // Resolve class names for the classes referenced by these subjects
+        const classIds = [...new Set((subjects || []).filter(s => s.class_id).map(s => s.class_id))];
+        let classMap = {};
+        if (classIds.length > 0) {
+          const { data: classesData } = await supabase
+            .from('classes')
+            .select('id, name')
+            .in('id', classIds);
+          (classesData || []).forEach(c => { classMap[c.id] = c.name; });
+        }
+
         const subjectMap = {};
         if (subjects) {
           subjects.forEach(s => {
-            subjectMap[s.id] = s.name;
+            subjectMap[s.id] = { name: s.name, class_id: s.class_id, class_name: classMap[s.class_id] || null };
           });
         }
-        
-        // Add subject name to each lesson
-        enrichedLessons = enrichedLessons.map(lesson => ({
-          ...lesson,
-          subject: lesson.subject_id ? { id: lesson.subject_id, name: subjectMap[lesson.subject_id] || 'Unknown' } : null
-        }));
+
+        // Add subject (and derived class) info to each lesson
+        enrichedLessons = enrichedLessons.map(lesson => {
+          const subjectInfo = lesson.subject_id ? subjectMap[lesson.subject_id] : null;
+          return {
+            ...lesson,
+            subject: subjectInfo ? { id: lesson.subject_id, name: subjectInfo.name || 'Unknown' } : null,
+            class_id: subjectInfo?.class_id || null,
+            class_name: subjectInfo?.class_name || null,
+          };
+        });
       }
     }
     
