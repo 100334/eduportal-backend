@@ -3865,6 +3865,67 @@ app.get('/api/learner/lesson/:lessonId', authenticateToken, async (req, res) => 
 });
 
 // ============================================
+// LIBRARY ENDPOINT (shared by learners & teachers)
+// ============================================
+// Unlike /api/learner/lessons (used by the guided, week-by-week Learning
+// Space), this returns ALL lesson resources flat — grouped by the caller
+// as Subject → resource type. No week gating, no deadlines, no stepper.
+// Accessible to both 'learner' and 'teacher' roles.
+app.get('/api/library/lessons', authenticateToken, async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  try {
+    if (!['learner', 'teacher'].includes(req.user.role)) {
+      return res.status(403).json({ success: false, message: 'Access denied.' });
+    }
+
+    let targetForm = null;
+
+    if (req.user.role === 'learner') {
+      const { data: learner, error: learnerError } = await supabase
+        .from('learners')
+        .select('form')
+        .eq('id', req.user.id)
+        .maybeSingle();
+      if (learnerError) throw learnerError;
+      targetForm = learner?.form || null;
+    }
+
+    let query = supabase.from('lessons').select('*');
+    if (targetForm && targetForm !== 'All') {
+      query = query.in('target_form', ['All', targetForm]);
+    }
+    const { data: lessons, error } = await query.order('display_order', { ascending: true });
+    if (error) throw error;
+
+    const { data: allSubjects } = await supabase.from('subjects').select('id, name, class_id');
+    const subjectMap = {};
+    if (allSubjects) allSubjects.forEach(s => { subjectMap[String(s.id)] = s; });
+
+    const enriched = (lessons || []).map(lesson => {
+      let resourceType = lesson.resource_type;
+      if (!resourceType) {
+        if (lesson.video_url) resourceType = 'video';
+        else if (lesson.pdf_url) resourceType = 'pdf';
+        else if (lesson.quiz_id) resourceType = 'quiz';
+        else resourceType = 'other';
+      }
+      const subjectInfo = lesson.subject_id != null ? subjectMap[String(lesson.subject_id)] : null;
+      return {
+        ...lesson,
+        resource_type: resourceType,
+        subject_name:  subjectInfo?.name || null,
+        class_id:      subjectInfo?.class_id || null,
+      };
+    });
+
+    res.json({ success: true, lessons: enriched });
+  } catch (error) {
+    console.error('Library lessons error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// ============================================
 // AI GRADING (OpenAI)
 // ============================================
 const OpenAI = require('openai');
