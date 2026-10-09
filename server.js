@@ -250,6 +250,18 @@ function getFormName(className) {
   return 'Form 1';
 }
 
+function getAccessibleForms(learnerForm) {
+  const normalizedForm = String(learnerForm || '').trim();
+  const accessibleForms = ['All', normalizedForm];
+
+  // Form 4 learners may revise and attempt Form 3 work.
+  if (normalizedForm.toLowerCase() === 'form 4') {
+    accessibleForms.push('Form 3');
+  }
+
+  return [...new Set(accessibleForms.filter(Boolean))];
+}
+
 // ============================================
 // PUBLIC TEST ENDPOINTS
 // ============================================
@@ -2733,9 +2745,10 @@ app.get('/api/quiz/quizzes', authenticateToken, async (req, res) => {
     }
 
     const learnerForm = learner.form;
+    const accessibleForms = getAccessibleForms(learnerForm);
     console.log(`Learner form: ${learnerForm}`);
 
-    // Fetch active quizzes for the learner's form
+    // Fetch active quizzes for the learner's form and permitted revision forms.
     const { data: quizzes, error } = await supabase
       .from('quizzes')
       .select(`
@@ -2743,7 +2756,7 @@ app.get('/api/quiz/quizzes', authenticateToken, async (req, res) => {
         subject:subject_id(id, name)
       `)
       .eq('is_active', true)
-      .in('target_form', ['All', learnerForm])
+      .in('target_form', accessibleForms)
       .order('created_at', { ascending: false });
 
     if (error) {
@@ -2848,6 +2861,23 @@ app.get('/api/quiz/:quizId/questions', authenticateToken, async (req, res) => {
       });
     }
 
+    const { data: learner, error: learnerError } = await supabase
+      .from('learners')
+      .select('form')
+      .eq('id', req.user.id)
+      .single();
+
+    if (learnerError || !learner) {
+      return res.status(404).json({ success: false, message: 'Learner not found' });
+    }
+
+    if (!getAccessibleForms(learner.form).includes(quiz.target_form)) {
+      return res.status(403).json({
+        success: false,
+        message: `This quiz is only available for ${quiz.target_form} students.`
+      });
+    }
+
     // Fetch questions
     const { data: questions, error: questionsError } = await supabase
       .from('quiz_questions')
@@ -2921,13 +2951,30 @@ app.post('/api/quiz/:quizId/start', authenticateToken, async (req, res) => {
     // 1. Check if the quiz exists and fetch allow_retake
     const { data: quiz, error: quizError } = await supabase
       .from('quizzes')
-      .select('subject_id, subject:subject_id(name), total_marks, passing_points, allow_retake')
+      .select('subject_id, subject:subject_id(name), total_marks, passing_points, allow_retake, target_form')
       .eq('id', quizId)
       .maybeSingle();
 
     if (quizError || !quiz) {
       console.error('Quiz not found:', quizId);
       return res.status(404).json({ success: false, message: 'Quiz not found' });
+    }
+
+    const { data: learner, error: learnerError } = await supabase
+      .from('learners')
+      .select('form')
+      .eq('id', req.user.id)
+      .single();
+
+    if (learnerError || !learner) {
+      return res.status(404).json({ success: false, message: 'Learner not found' });
+    }
+
+    if (!getAccessibleForms(learner.form).includes(quiz.target_form)) {
+      return res.status(403).json({
+        success: false,
+        message: `This quiz is only available for ${quiz.target_form} students.`
+      });
     }
 
     // 2. Check for ANY existing attempt (any status)
@@ -3463,7 +3510,7 @@ app.post('/api/quiz/:quizId/verify', authenticateToken, async (req, res) => {
       });
     }
     
-    const isEligible = quiz.target_form === 'All' || quiz.target_form === learner.form;
+    const isEligible = getAccessibleForms(learner.form).includes(quiz.target_form);
     
     if (!isEligible) {
       return res.status(403).json({
@@ -3808,7 +3855,7 @@ app.get('/api/learner/lessons', authenticateToken, async (req, res) => {
     // Use separate .in() instead of .or() — avoids space-in-value parsing issues
     let query = supabase.from('lessons').select('*');
     if (learnerForm && learnerForm !== 'All') {
-      query = query.in('target_form', ['All', learnerForm]);
+      query = query.in('target_form', getAccessibleForms(learnerForm));
     }
     const { data: lessons, error } = await query.order('week_number', { ascending: true }).order('display_order', { ascending: true });
     if (error) throw error;
@@ -3865,62 +3912,113 @@ app.get('/api/learner/lesson/:lessonId', authenticateToken, async (req, res) => 
 });
 
 // ============================================
-// LIBRARY ENDPOINT (shared by learners & teachers)
+// LIBRARY — comprehensive subject notes/booklets
 // ============================================
-// Unlike /api/learner/lessons (used by the guided, week-by-week Learning
-// Space), this returns ALL lesson resources flat — grouped by the caller
-// as Subject → resource type. No week gating, no deadlines, no stepper.
-// Accessible to both 'learner' and 'teacher' roles.
-app.get('/api/library/lessons', authenticateToken, async (req, res) => {
+// The Library is separate from the weekly `lessons` table. It stores
+// admin-uploaded, merged "booklet" notes per subject (e.g. a full term's
+// notes combined into one PDF). Flat browsing: Subject → list of notes.
+// Only Admins can upload/edit/delete; Learners and Teachers can view/download.
+//
+// Expected Supabase table (create once in the DB):
+//   CREATE TABLE library_notes (
+//     id           BIGSERIAL PRIMARY KEY,
+//     subject_id   BIGINT REFERENCES subjects(id),
+//     title        TEXT NOT NULL,
+//     description  TEXT,
+//     pdf_url      TEXT NOT NULL,
+//     uploaded_by  BIGINT,
+//     created_at   TIMESTAMPTZ DEFAULT NOW()
+//   );
+
+// GET /api/library/notes — list all notes, grouped-ready (flat array).
+// Accessible to learners, teachers, and admins.
+app.get('/api/library/notes', authenticateToken, async (req, res) => {
   res.set('Cache-Control', 'no-store');
   try {
-    if (!['learner', 'teacher'].includes(req.user.role)) {
+    if (!['learner', 'teacher', 'admin'].includes(req.user.role)) {
       return res.status(403).json({ success: false, message: 'Access denied.' });
     }
 
-    let targetForm = null;
-
-    if (req.user.role === 'learner') {
-      const { data: learner, error: learnerError } = await supabase
-        .from('learners')
-        .select('form')
-        .eq('id', req.user.id)
-        .maybeSingle();
-      if (learnerError) throw learnerError;
-      targetForm = learner?.form || null;
-    }
-
-    let query = supabase.from('lessons').select('*');
-    if (targetForm && targetForm !== 'All') {
-      query = query.in('target_form', ['All', targetForm]);
-    }
-    const { data: lessons, error } = await query.order('display_order', { ascending: true });
+    const { data: notes, error } = await supabase
+      .from('library_notes')
+      .select('*')
+      .order('created_at', { ascending: false });
     if (error) throw error;
 
     const { data: allSubjects } = await supabase.from('subjects').select('id, name, class_id');
     const subjectMap = {};
     if (allSubjects) allSubjects.forEach(s => { subjectMap[String(s.id)] = s; });
 
-    const enriched = (lessons || []).map(lesson => {
-      let resourceType = lesson.resource_type;
-      if (!resourceType) {
-        if (lesson.video_url) resourceType = 'video';
-        else if (lesson.pdf_url) resourceType = 'pdf';
-        else if (lesson.quiz_id) resourceType = 'quiz';
-        else resourceType = 'other';
-      }
-      const subjectInfo = lesson.subject_id != null ? subjectMap[String(lesson.subject_id)] : null;
+    const enriched = (notes || []).map(note => {
+      const subjectInfo = note.subject_id != null ? subjectMap[String(note.subject_id)] : null;
       return {
-        ...lesson,
-        resource_type: resourceType,
-        subject_name:  subjectInfo?.name || null,
-        class_id:      subjectInfo?.class_id || null,
+        ...note,
+        subject_name: subjectInfo?.name || 'Unassigned',
+        class_id:     subjectInfo?.class_id || null,
       };
     });
 
-    res.json({ success: true, lessons: enriched });
+    res.json({ success: true, notes: enriched });
   } catch (error) {
-    console.error('Library lessons error:', error);
+    console.error('Library notes fetch error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// POST /api/admin/library/notes — upload a new comprehensive note (Admin only)
+app.post('/api/admin/library/notes', authenticateToken, authenticateAdmin, async (req, res) => {
+  try {
+    const { subject_id, title, description, pdf_url } = req.body;
+    if (!subject_id || !title || !pdf_url) {
+      return res.status(400).json({ success: false, message: 'subject_id, title, and pdf_url are required.' });
+    }
+    const { data: note, error } = await supabase
+      .from('library_notes')
+      .insert([{ subject_id, title, description: description || null, pdf_url, uploaded_by: req.user.id }])
+      .select()
+      .single();
+    if (error) throw error;
+    res.status(201).json({ success: true, note });
+  } catch (error) {
+    console.error('Library note create error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// PUT /api/admin/library/notes/:id — edit a note (Admin only)
+app.put('/api/admin/library/notes/:id', authenticateToken, authenticateAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { subject_id, title, description, pdf_url } = req.body;
+    const updates = {};
+    if (subject_id !== undefined) updates.subject_id = subject_id;
+    if (title !== undefined) updates.title = title;
+    if (description !== undefined) updates.description = description;
+    if (pdf_url !== undefined) updates.pdf_url = pdf_url;
+
+    const { data: note, error } = await supabase
+      .from('library_notes')
+      .update(updates)
+      .eq('id', id)
+      .select()
+      .single();
+    if (error) throw error;
+    res.json({ success: true, note });
+  } catch (error) {
+    console.error('Library note update error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// DELETE /api/admin/library/notes/:id — remove a note (Admin only)
+app.delete('/api/admin/library/notes/:id', authenticateToken, authenticateAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { error } = await supabase.from('library_notes').delete().eq('id', id);
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Library note delete error:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 });
