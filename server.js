@@ -254,9 +254,12 @@ function getAccessibleForms(learnerForm) {
   const normalizedForm = String(learnerForm || '').trim();
   const accessibleForms = ['All', normalizedForm];
 
-  // Form 4 learners may revise and attempt Form 3 work.
+  // Form 4 learners may revise Form 3 work; Form 3 learners may preview Form 4 work.
   if (normalizedForm.toLowerCase() === 'form 4') {
     accessibleForms.push('Form 3');
+  }
+  if (normalizedForm.toLowerCase() === 'form 3') {
+    accessibleForms.push('Form 4');
   }
 
   return [...new Set(accessibleForms.filter(Boolean))];
@@ -4424,7 +4427,55 @@ app.put('/api/admin/lesson-feedback/:id/reply', authenticateToken, authenticateA
   }
 });
 
-// POST /api/admin/ai-parse-questions — extract structured questions from raw text
+// POST /api/admin/ai-generate-lesson-content — auto-generate objectives + instructions
+app.post('/api/admin/ai-generate-lesson-content', authenticateToken, authenticateAdmin, async (req, res) => {
+  try {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey || apiKey === 'your_gemini_api_key_here') {
+      return res.status(503).json({ success: false, message: 'GEMINI_API_KEY not configured' });
+    }
+
+    const { title, subject, target_form, description } = req.body;
+    if (!title?.trim()) return res.status(400).json({ success: false, message: 'title is required' });
+
+    const { GoogleGenerativeAI } = require('@google/generative-ai');
+    const genAI = new GoogleGenerativeAI(apiKey);
+    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+
+    const prompt = `You are a secondary school curriculum designer in Malawi.
+Generate learning objectives and instructions for the following lesson.
+
+Lesson title: ${title}
+Subject: ${subject || 'General'}
+Target form: ${target_form || 'All'}
+${description ? `Description: ${description}` : ''}
+
+Requirements:
+- Objectives: 3–5 clear, measurable learning outcomes. Each on its own line. Start each with an action verb (e.g. "Define", "Explain", "Calculate", "Identify"). No bullet points or numbers.
+- Instructions: 2–4 short sentences guiding the learner on how to approach the lesson (e.g. read notes first, take notes, watch the video carefully).
+
+Respond with ONLY valid JSON in this exact format — no markdown, no extra text:
+{
+  "objectives": "line1\\nline2\\nline3",
+  "instructions": "Sentence one. Sentence two. Sentence three."
+}`;
+
+    const result = await model.generateContent(prompt);
+    const text = result.response.text().trim();
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return res.json({ success: false, message: 'AI did not return valid content' });
+
+    const parsed = JSON.parse(jsonMatch[0]);
+    res.json({
+      success:      true,
+      objectives:   parsed.objectives   || '',
+      instructions: parsed.instructions || '',
+    });
+  } catch (err) {
+    console.error('AI generate lesson content error:', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
 app.post('/api/admin/ai-parse-questions', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
     const apiKey = process.env.OPENAI_API_KEY;
