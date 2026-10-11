@@ -4574,20 +4574,26 @@ app.put('/api/admin/lesson-feedback/:id/reply', authenticateToken, authenticateA
 // POST /api/admin/ai-generate-lesson-content — auto-generate objectives + instructions
 app.post('/api/admin/ai-generate-lesson-content', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey || apiKey === 'your_gemini_api_key_here') {
-      return res.status(503).json({ success: false, message: 'GEMINI_API_KEY not configured' });
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey) {
+      return res.status(503).json({ success: false, message: 'OPENAI_API_KEY not configured' });
     }
 
     const { title, subject, target_form, description } = req.body;
     if (!title?.trim()) return res.status(400).json({ success: false, message: 'title is required' });
 
-    const { GoogleGenerativeAI } = require('@google/generative-ai');
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+    const openai = new OpenAI({ apiKey });
 
-    const prompt = `You are a secondary school curriculum designer in Malawi.
-Generate learning objectives and instructions for the following lesson.
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        {
+          role: 'system',
+          content: 'You are a secondary school curriculum designer in Malawi. Respond only with valid JSON — no markdown, no extra text.',
+        },
+        {
+          role: 'user',
+          content: `Generate learning objectives and instructions for this lesson.
 
 Lesson title: ${title}
 Subject: ${subject || 'General'}
@@ -4595,17 +4601,18 @@ Target form: ${target_form || 'All'}
 ${description ? `Description: ${description}` : ''}
 
 Requirements:
-- Objectives: 3–5 clear, measurable learning outcomes. Each on its own line. Start each with an action verb (e.g. "Define", "Explain", "Calculate", "Identify"). No bullet points or numbers.
-- Instructions: 2–4 short sentences guiding the learner on how to approach the lesson (e.g. read notes first, take notes, watch the video carefully).
+- Objectives: 3–5 clear, measurable learning outcomes. Each on its own line. Start each with an action verb (Define, Explain, Calculate, Identify). No bullet points or numbers.
+- Instructions: 2–4 short sentences guiding the learner (e.g. read notes first, take notes, watch the video carefully).
 
-Respond with ONLY valid JSON in this exact format — no markdown, no extra text:
-{
-  "objectives": "line1\\nline2\\nline3",
-  "instructions": "Sentence one. Sentence two. Sentence three."
-}`;
+Respond with ONLY this JSON format:
+{"objectives":"line1\\nline2\\nline3","instructions":"Sentence one. Sentence two."}`,
+        },
+      ],
+      temperature: 0.7,
+      max_tokens: 400,
+    });
 
-    const result = await model.generateContent(prompt);
-    const text = result.response.text().trim();
+    const text = completion.choices[0]?.message?.content?.trim() || '';
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (!jsonMatch) return res.json({ success: false, message: 'AI did not return valid content' });
 
