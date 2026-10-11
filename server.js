@@ -3836,6 +3836,124 @@ app.delete('/api/admin/lessons/:id', authenticateToken, authenticateAdmin, async
   }
 });
 // ============================================
+// LESSON ACCESS TOKEN SYSTEM
+// ============================================
+/*
+  Run once in Supabase SQL Editor:
+
+  ALTER TABLE learners ADD COLUMN IF NOT EXISTS access_token TEXT;
+  ALTER TABLE learners ADD COLUMN IF NOT EXISTS token_expires_at TIMESTAMPTZ;
+  ALTER TABLE learners ADD COLUMN IF NOT EXISTS token_activated_at TIMESTAMPTZ;
+*/
+
+// Helper — generate a random readable token e.g. EDU-2026-A3F9K2
+const generateAccessToken = () => {
+  const year = new Date().getFullYear();
+  const rand = Math.random().toString(36).substring(2, 8).toUpperCase();
+  return `EDU-${year}-${rand}`;
+};
+
+// POST /api/admin/tokens/generate — admin generates a token for a learner
+app.post('/api/admin/tokens/generate', authenticateToken, authenticateAdmin, async (req, res) => {
+  try {
+    const { learner_id, duration_days = 365 } = req.body;
+    if (!learner_id) return res.status(400).json({ success: false, message: 'learner_id required' });
+
+    const token        = generateAccessToken();
+    const activatedAt  = new Date().toISOString();
+    const expiresAt    = new Date(Date.now() + duration_days * 24 * 60 * 60 * 1000).toISOString();
+
+    const { error } = await supabase
+      .from('learners')
+      .update({
+        access_token:        token,
+        token_activated_at:  activatedAt,
+        token_expires_at:    expiresAt,
+      })
+      .eq('id', learner_id);
+
+    if (error) throw error;
+
+    await logAdminAction(req.user.id, 'GENERATE_TOKEN',
+      `Generated token ${token} for learner ${learner_id}, expires ${expiresAt}`, req.ip);
+
+    res.json({ success: true, token, expires_at: expiresAt, activated_at: activatedAt });
+  } catch (err) {
+    console.error('Token generate error:', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// POST /api/admin/tokens/revoke — admin revokes a learner's token
+app.post('/api/admin/tokens/revoke', authenticateToken, authenticateAdmin, async (req, res) => {
+  try {
+    const { learner_id } = req.body;
+    if (!learner_id) return res.status(400).json({ success: false, message: 'learner_id required' });
+
+    const { error } = await supabase
+      .from('learners')
+      .update({ access_token: null, token_expires_at: null, token_activated_at: null })
+      .eq('id', learner_id);
+
+    if (error) throw error;
+    res.json({ success: true, message: 'Token revoked' });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// GET /api/admin/tokens — list all learners with their token status
+app.get('/api/admin/tokens', authenticateToken, authenticateAdmin, async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('learners')
+      .select('id, name, reg_number, form, access_token, token_expires_at, token_activated_at')
+      .order('name', { ascending: true });
+
+    if (error) throw error;
+
+    const now = new Date();
+    const learners = (data || []).map(l => ({
+      ...l,
+      token_active: !!(l.access_token && l.token_expires_at && new Date(l.token_expires_at) > now),
+      token_expired: !!(l.access_token && l.token_expires_at && new Date(l.token_expires_at) <= now),
+    }));
+
+    res.json({ success: true, learners });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// GET /api/learner/token-status — learner checks their own token status
+app.get('/api/learner/token-status', authenticateToken, async (req, res) => {
+  try {
+    const { data: learner, error } = await supabase
+      .from('learners')
+      .select('access_token, token_expires_at, token_activated_at')
+      .eq('id', req.user.id)
+      .single();
+
+    if (error) throw error;
+
+    const now = new Date();
+    const hasToken    = !!learner?.access_token;
+    const notExpired  = hasToken && learner.token_expires_at && new Date(learner.token_expires_at) > now;
+
+    res.json({
+      success:        true,
+      has_access:     notExpired,
+      has_token:      hasToken,
+      token:          hasToken ? `${learner.access_token.slice(0, 7)}…` : null, // partial for display
+      expires_at:     learner?.token_expires_at  || null,
+      activated_at:   learner?.token_activated_at || null,
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ============================================
 // LEARNER LESSONS ENDPOINTS
 // ============================================
 
@@ -3849,11 +3967,25 @@ app.get('/api/learner/lessons', authenticateToken, async (req, res) => {
   try {
     const { data: learner, error: learnerError } = await supabase
       .from('learners')
-      .select('form')
+      .select('form, access_token, token_expires_at')
       .eq('id', req.user.id)
       .single();
     if (learnerError) throw learnerError;
     const learnerForm = learner.form;
+
+    // Token access check
+    const now = new Date();
+    const hasValidToken = learner.access_token &&
+      learner.token_expires_at &&
+      new Date(learner.token_expires_at) > now;
+
+    if (!hasValidToken) {
+      return res.status(403).json({
+        success:        false,
+        token_required: true,
+        message:        'A valid access token is required to view lessons.',
+      });
+    }
     const mode = req.query.mode; // 'schedule' | 'reference' | undefined
 
     let targetForms;
