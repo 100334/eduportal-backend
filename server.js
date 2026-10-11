@@ -3840,10 +3840,11 @@ app.delete('/api/admin/lessons/:id', authenticateToken, authenticateAdmin, async
 // ============================================
 
 // Get all lessons for learner (filtered by form)
-// Get all lessons for learner (filtered by form) - with resource_type
-// Get all lessons for learner (filtered by form) - without nested relation
+// Get lessons for learner
+// ?mode=schedule  → own form + All only  (weekly timetable)
+// ?mode=reference → other forms only     (reference library)
+// (no mode)       → all accessible forms (backward compat)
 app.get('/api/learner/lessons', authenticateToken, async (req, res) => {
-  // Disable caching so subject lookups always run fresh
   res.set('Cache-Control', 'no-store');
   try {
     const { data: learner, error: learnerError } = await supabase
@@ -3853,23 +3854,34 @@ app.get('/api/learner/lessons', authenticateToken, async (req, res) => {
       .single();
     if (learnerError) throw learnerError;
     const learnerForm = learner.form;
+    const mode = req.query.mode; // 'schedule' | 'reference' | undefined
 
-    // Manual two-step: fetch lessons then fetch subject names by IDs
-    // Use separate .in() instead of .or() — avoids space-in-value parsing issues
-    let query = supabase.from('lessons').select('*');
-    if (learnerForm && learnerForm !== 'All') {
-      query = query.in('target_form', getAccessibleForms(learnerForm));
+    let targetForms;
+    if (mode === 'schedule') {
+      // Only own form + All
+      targetForms = ['All', learnerForm].filter(Boolean);
+    } else if (mode === 'reference') {
+      // Only other forms (not own form, not All)
+      const all = getAccessibleForms(learnerForm);
+      targetForms = all.filter(f => f !== 'All' && f !== learnerForm);
+    } else {
+      // All accessible forms
+      targetForms = getAccessibleForms(learnerForm);
     }
-    const { data: lessons, error } = await query.order('week_number', { ascending: true }).order('display_order', { ascending: true });
+
+    let query = supabase.from('lessons').select('*');
+    if (targetForms && targetForms.length > 0) {
+      query = query.in('target_form', targetForms);
+    }
+    const { data: lessons, error } = await query
+      .order('week_number', { ascending: true })
+      .order('display_order', { ascending: true });
     if (error) throw error;
 
-    // Always fetch all subjects — no conditional, no type issues
+    // Always fetch all subjects
     const { data: allSubjects } = await supabase.from('subjects').select('id, name');
     const subjectMap = {};
     if (allSubjects) allSubjects.forEach(s => { subjectMap[String(s.id)] = s.name; });
-
-    console.log('📚 Lessons:', (lessons||[]).length, '| Subjects:', Object.keys(subjectMap).length);
-    console.log('📚 Sample lesson subject_id:', (lessons||[])[0]?.subject_id, '| Map has it:', !!subjectMap[String((lessons||[])[0]?.subject_id)]);
 
     const enriched = (lessons || []).map(lesson => {
       let resourceType = lesson.resource_type;
