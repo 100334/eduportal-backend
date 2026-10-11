@@ -3928,25 +3928,28 @@ app.get('/api/admin/tokens', authenticateToken, authenticateAdmin, async (req, r
 // GET /api/learner/token-status — learner checks their own token status
 app.get('/api/learner/token-status', authenticateToken, async (req, res) => {
   try {
-    const { data: learner, error } = await supabase
-      .from('learners')
-      .select('access_token, token_expires_at, token_activated_at')
-      .eq('id', req.user.id)
-      .single();
+    let learner = null;
+    try {
+      const { data, error } = await supabase
+        .from('learners')
+        .select('access_token, token_expires_at, token_activated_at')
+        .eq('id', req.user.id)
+        .single();
+      if (!error) learner = data;
+    } catch { /* token columns may not exist yet */ }
 
-    if (error) throw error;
-
-    const now = new Date();
-    const hasToken    = !!learner?.access_token;
-    const notExpired  = hasToken && learner.token_expires_at && new Date(learner.token_expires_at) > now;
+    const now        = new Date();
+    const hasToken   = !!learner?.access_token;
+    const notExpired = hasToken && learner.token_expires_at && new Date(learner.token_expires_at) > now;
+    const hasColumns = learner !== null && 'access_token' in (learner || {});
 
     res.json({
-      success:        true,
-      has_access:     notExpired,
-      has_token:      hasToken,
-      token:          hasToken ? `${learner.access_token.slice(0, 7)}…` : null, // partial for display
-      expires_at:     learner?.token_expires_at  || null,
-      activated_at:   learner?.token_activated_at || null,
+      success:      true,
+      has_access:   !hasColumns || notExpired, // allow if columns not added yet
+      has_token:    hasToken,
+      token:        hasToken ? `${learner.access_token.slice(0, 7)}…` : null,
+      expires_at:   learner?.token_expires_at   || null,
+      activated_at: learner?.token_activated_at || null,
     });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -3965,19 +3968,35 @@ app.get('/api/learner/token-status', authenticateToken, async (req, res) => {
 app.get('/api/learner/lessons', authenticateToken, async (req, res) => {
   res.set('Cache-Control', 'no-store');
   try {
-    const { data: learner, error: learnerError } = await supabase
-      .from('learners')
-      .select('form, access_token, token_expires_at')
-      .eq('id', req.user.id)
-      .single();
-    if (learnerError) throw learnerError;
-    const learnerForm = learner.form;
+    // Fetch learner — try with token fields first, fall back to just form
+    let learnerData = null;
+    try {
+      const { data, error: e1 } = await supabase
+        .from('learners')
+        .select('form, access_token, token_expires_at')
+        .eq('id', req.user.id)
+        .single();
+      if (e1) throw e1;
+      learnerData = data;
+    } catch {
+      // Token columns may not exist yet — fetch without them
+      const { data, error: e2 } = await supabase
+        .from('learners')
+        .select('form')
+        .eq('id', req.user.id)
+        .single();
+      if (e2) throw e2;
+      learnerData = data;
+    }
+    const learnerForm = learnerData.form;
 
-    // Token access check
+    // Token check — only enforce if columns are present and populated
     const now = new Date();
-    const hasValidToken = learner.access_token &&
-      learner.token_expires_at &&
-      new Date(learner.token_expires_at) > now;
+    const hasTokenColumns = 'access_token' in (learnerData || {});
+    const hasValidToken = !hasTokenColumns ||
+      (learnerData.access_token &&
+       learnerData.token_expires_at &&
+       new Date(learnerData.token_expires_at) > now);
 
     if (!hasValidToken) {
       return res.status(403).json({
