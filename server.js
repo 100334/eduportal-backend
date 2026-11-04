@@ -2216,6 +2216,8 @@ app.post('/api/admin/quizzes', authenticateToken, authenticateAdmin, async (req,
         exam_type: exam_type || 'SCHOOL CERTIFICATE OF EDUCATION MOCK EXAMINATION',
         scheduled_start: scheduled_start || null,
         scheduled_end: scheduled_end || null,
+        week_number: parseInt(week_number) || 1,
+        allow_retake: !!allow_retake,
         created_by: req.user.id,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString()
