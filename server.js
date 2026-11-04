@@ -4153,7 +4153,6 @@ app.put('/api/admin/library/notes/:id', authenticateToken, authenticateAdmin, as
 app.delete('/api/admin/library/notes/:id', authenticateToken, authenticateAdmin, async (req, res) => {
   res.json({ success: false, message: 'Delete notes through Lesson Management.' });
 });
-});
 
 // ============================================
 // AI GRADING (OpenAI)
