@@ -2640,7 +2640,8 @@ app.put('/api/admin/quizzes/:quizId', authenticateToken, authenticateAdmin, asyn
     const { quizId } = req.params;
     const { 
       subject_id, title, description, duration, total_marks, is_active, target_form,
-      section_a_marks, section_b_marks, exam_year, exam_type, scheduled_start, scheduled_end
+      section_a_marks, section_b_marks, exam_year, exam_type, scheduled_start, scheduled_end,
+      week_number, allow_retake
     } = req.body;
     
     const updateData = {};
@@ -2657,6 +2658,8 @@ app.put('/api/admin/quizzes/:quizId', authenticateToken, authenticateAdmin, asyn
     if (exam_type !== undefined) updateData.exam_type = exam_type;
     if (scheduled_start !== undefined) updateData.scheduled_start = scheduled_start;
     if (scheduled_end !== undefined) updateData.scheduled_end = scheduled_end;
+    if (week_number !== undefined) updateData.week_number = parseInt(week_number) || 1;
+    if (allow_retake !== undefined) updateData.allow_retake = !!allow_retake;
     updateData.updated_at = new Date().toISOString();
     
     const { data: quiz, error } = await supabase
@@ -3219,7 +3222,7 @@ app.post('/api/quiz/:quizId/submit', authenticateToken, async (req, res) => {
       };
     });
 
-    // Update attempt – status = 'submitted' (pending admin review)
+    // Update attempt – status = 'submitted' initially
     const { error: updateError } = await supabase
       .from('quiz_attempts')
       .update({
@@ -3232,6 +3235,120 @@ app.post('/api/quiz/:quizId/submit', authenticateToken, async (req, res) => {
       .eq('id', attempt_id);
 
     if (updateError) throw updateError;
+
+    // ── AUTO-GRADE: MCQ instantly + AI for short answer ────────────────────
+    try {
+      const apiKey = process.env.OPENAI_API_KEY;
+      let gradedAnswers = [...submittedAnswers];
+
+      // 1. Auto-grade MCQ (correct answer is known)
+      gradedAnswers = gradedAnswers.map(ans => {
+        if (ans.question_type === 'multiple_choice') {
+          const question = questions.find(q => q.id === ans.question_id);
+          const selectedIdx = parseInt(ans.selected_answer);
+          const correctIdx = question?.correct_answer;
+          const isCorrect = selectedIdx === correctIdx;
+          return {
+            ...ans,
+            is_correct: isCorrect,
+            points_obtained: isCorrect ? ans.max_points : 0,
+            feedback: isCorrect ? 'Correct!' : `Incorrect. The correct answer is: ${question?.options?.[correctIdx] || 'N/A'}`,
+          };
+        }
+        return ans;
+      });
+
+      // 2. AI-grade short-answer questions using OpenAI
+      if (apiKey) {
+        const openai = new OpenAI({ apiKey });
+        const shortAnswers = gradedAnswers.filter(a =>
+          a.question_type === 'short_answer' && a.points_obtained === null
+        );
+
+        for (const ans of shortAnswers) {
+          const question = questions.find(q => q.id === ans.question_id);
+          try {
+            const completion = await openai.chat.completions.create({
+              model: 'gpt-4o-mini',
+              messages: [
+                {
+                  role: 'system',
+                  content: 'You are a secondary school teacher marking a quiz. Respond only with valid JSON.',
+                },
+                {
+                  role: 'user',
+                  content: `Question: ${ans.question_text}
+Expected answer: ${question?.expected_answer || 'N/A'}
+Learner's answer: ${ans.selected_answer_text || '(no answer)'}
+Maximum marks: ${ans.max_points}
+
+Award marks (0 to ${ans.max_points}) and write one sentence of feedback.
+Respond as JSON: {"marks": <number>, "feedback": "<one sentence>"}`,
+                },
+              ],
+              temperature: 0.3,
+              max_tokens: 100,
+            });
+
+            const text = completion.choices[0]?.message?.content?.trim() || '';
+            const jsonMatch = text.match(/\{[\s\S]*\}/);
+            if (jsonMatch) {
+              const parsed = JSON.parse(jsonMatch[0]);
+              const marks = Math.min(Math.max(Number(parsed.marks) || 0, 0), ans.max_points);
+              const idx = gradedAnswers.findIndex(a => a.question_id === ans.question_id);
+              if (idx !== -1) {
+                gradedAnswers[idx] = {
+                  ...gradedAnswers[idx],
+                  points_obtained: marks,
+                  is_correct: marks === ans.max_points,
+                  feedback: parsed.feedback || null,
+                };
+              }
+            }
+          } catch (aiErr) {
+            console.error('AI grade error for question', ans.question_id, aiErr.message);
+            // Leave ungraded for manual review
+          }
+        }
+      }
+
+      // 3. Calculate totals
+      const earnedMarks = gradedAnswers.reduce((s, a) => s + (a.points_obtained || 0), 0);
+      const totalMarks = gradedAnswers.reduce((s, a) => s + (a.max_points || 0), 0);
+      const percentage = totalMarks > 0 ? Math.round((earnedMarks / totalMarks) * 100) : 0;
+      const passed = earnedMarks >= (totalMarks * 0.4);
+
+      // 4. Update attempt to 'completed' with grades
+      await supabase
+        .from('quiz_attempts')
+        .update({
+          status: 'completed',
+          answers: gradedAnswers,
+          earned_points: earnedMarks,
+          total_points: totalMarks,
+          percentage: percentage,
+          passed: passed,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', attempt_id);
+
+      // 5. Notify learner
+      await supabase.from('notifications').insert({
+        user_id: learnerId,
+        type: 'quiz_graded',
+        title: 'Quiz Graded',
+        message: `Your quiz has been graded automatically. Score: ${earnedMarks}/${totalMarks} (${percentage}%)`,
+        related_id: attempt_id,
+        is_read: false,
+        created_at: new Date().toISOString(),
+      });
+
+      console.log(`✅ Auto-graded attempt ${attempt_id}: ${earnedMarks}/${totalMarks} (${percentage}%)`);
+
+    } catch (gradeError) {
+      console.error('Auto-grade error (non-fatal — quiz still submitted):', gradeError.message);
+      // Quiz is still submitted, just not auto-graded — admin can grade manually
+    }
 
     // (Optional) Notify admins
     const { data: learner } = await supabase
@@ -3257,7 +3374,8 @@ app.post('/api/quiz/:quizId/submit', authenticateToken, async (req, res) => {
 
     res.json({
       success: true,
-      message: 'Your answers have been submitted successfully. The admin will review and grade your submission shortly.'
+      message: 'Your answers have been submitted and graded automatically. Check My Results for your score.',
+      auto_graded: true,
     });
   } catch (error) {
     console.error('Submit quiz error:', error);
