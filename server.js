@@ -4099,97 +4099,60 @@ app.get('/api/learner/lesson/:lessonId', authenticateToken, async (req, res) => 
 //     created_at   TIMESTAMPTZ DEFAULT NOW()
 //   );
 
-// GET /api/library/notes — list all notes, grouped-ready (flat array).
+// GET /api/library/notes — list all PDF lessons as library notes (reuses lessons table)
 // Accessible to learners, teachers, and admins.
 app.get('/api/library/notes', authenticateToken, async (req, res) => {
   res.set('Cache-Control', 'no-store');
   try {
-    if (!['learner', 'teacher', 'admin'].includes(req.user.role)) {
-      return res.status(403).json({ success: false, message: 'Access denied.' });
-    }
-
-    const { data: notes, error } = await supabase
-      .from('library_notes')
+    // Fetch all lessons that have a PDF — these serve as library notes
+    const { data: lessons, error } = await supabase
+      .from('lessons')
       .select('*')
+      .not('pdf_url', 'is', null)
       .order('created_at', { ascending: false });
     if (error) throw error;
 
+    // Fetch all subjects for name lookup
     const { data: allSubjects } = await supabase.from('subjects').select('id, name, class_id');
     const subjectMap = {};
     if (allSubjects) allSubjects.forEach(s => { subjectMap[String(s.id)] = s; });
 
-    const enriched = (notes || []).map(note => {
-      const subjectInfo = note.subject_id != null ? subjectMap[String(note.subject_id)] : null;
+    const enriched = (lessons || []).map(lesson => {
+      const subjectInfo = lesson.subject_id != null ? subjectMap[String(lesson.subject_id)] : null;
       return {
-        ...note,
+        id:           lesson.id,
+        title:        lesson.title,
+        description:  lesson.description || '',
+        pdf_url:      lesson.pdf_url,
+        subject_id:   lesson.subject_id,
         subject_name: subjectInfo?.name || 'Unassigned',
         class_id:     subjectInfo?.class_id || null,
+        target_form:  lesson.target_form || 'All',
+        created_at:   lesson.created_at,
       };
     });
 
     res.json({ success: true, notes: enriched });
   } catch (error) {
     console.error('Library notes fetch error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.json({ success: true, notes: [], message: error.message });
   }
 });
 
-// POST /api/admin/library/notes — upload a new comprehensive note (Admin only)
+// POST /api/admin/library/notes — disabled, use Lesson Management to upload PDFs
 app.post('/api/admin/library/notes', authenticateToken, authenticateAdmin, async (req, res) => {
-  try {
-    const { subject_id, title, description, pdf_url } = req.body;
-    if (!subject_id || !title || !pdf_url) {
-      return res.status(400).json({ success: false, message: 'subject_id, title, and pdf_url are required.' });
-    }
-    const { data: note, error } = await supabase
-      .from('library_notes')
-      .insert([{ subject_id, title, description: description || null, pdf_url, uploaded_by: req.user.id }])
-      .select()
-      .single();
-    if (error) throw error;
-    res.status(201).json({ success: true, note });
-  } catch (error) {
-    console.error('Library note create error:', error);
-    res.status(500).json({ success: false, message: error.message });
-  }
+  res.json({ success: false, message: 'Library notes are managed through Lesson Management. Upload PDFs there with resource_type = pdf.' });
 });
 
-// PUT /api/admin/library/notes/:id — edit a note (Admin only)
+// PUT /api/admin/library/notes/:id — disabled
 app.put('/api/admin/library/notes/:id', authenticateToken, authenticateAdmin, async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { subject_id, title, description, pdf_url } = req.body;
-    const updates = {};
-    if (subject_id !== undefined) updates.subject_id = subject_id;
-    if (title !== undefined) updates.title = title;
-    if (description !== undefined) updates.description = description;
-    if (pdf_url !== undefined) updates.pdf_url = pdf_url;
-
-    const { data: note, error } = await supabase
-      .from('library_notes')
-      .update(updates)
-      .eq('id', id)
-      .select()
-      .single();
-    if (error) throw error;
-    res.json({ success: true, note });
-  } catch (error) {
-    console.error('Library note update error:', error);
-    res.status(500).json({ success: false, message: error.message });
-  }
+  res.json({ success: false, message: 'Edit notes through Lesson Management.' });
 });
 
-// DELETE /api/admin/library/notes/:id — remove a note (Admin only)
+// DELETE /api/admin/library/notes/:id — disabled
 app.delete('/api/admin/library/notes/:id', authenticateToken, authenticateAdmin, async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { error } = await supabase.from('library_notes').delete().eq('id', id);
-    if (error) throw error;
-    res.json({ success: true });
-  } catch (error) {
-    console.error('Library note delete error:', error);
-    res.status(500).json({ success: false, message: error.message });
-  }
+  res.json({ success: false, message: 'Delete notes through Lesson Management.' });
+});
 });
 
 // ============================================
