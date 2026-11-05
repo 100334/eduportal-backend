@@ -2548,9 +2548,16 @@ app.put('/api/admin/quizzes/:quizId/questions/:questionId', authenticateToken, a
       if (correct_answer !== undefined) updateData.correct_answer = correct_answer;
       updateData.expected_answer = null;
     } else {
+      const finalExpectedAnswer = expected_answer !== undefined ? expected_answer : existing.expected_answer;
+      if (qType === 'short_answer' && (typeof finalExpectedAnswer !== 'string' || !finalExpectedAnswer.trim())) {
+        return res.status(400).json({
+          success: false,
+          message: 'Short answer questions require a model answer'
+        });
+      }
       updateData.options = null;
       updateData.correct_answer = null;
-      if (expected_answer !== undefined) updateData.expected_answer = expected_answer?.trim().toLowerCase() || null;
+      if (expected_answer !== undefined) updateData.expected_answer = expected_answer.trim().toLowerCase();
     }
 
     const { data: updated, error: updateError } = await supabase
@@ -4885,7 +4892,10 @@ app.post('/api/admin/quizzes/:quizId/questions/bulk', authenticateToken, authent
     const toInsert = [];
     for (const [index, q] of questions.entries()) {
       const questionText = String(q.question_text || q.question || '').trim();
-      const rawQuestionType = String(q.question_type || q.type || (q.options ? 'multiple_choice' : 'short_answer'))
+      const hasOptions = Boolean(
+        q.options || q.choices || q.option_a || q.opt_a || q.a
+      );
+      const rawQuestionType = String(q.question_type || q.type || (hasOptions ? 'multiple_choice' : 'short_answer'))
         .toLowerCase()
         .replace(/[-\s]+/g, '_');
       const questionType = ['multiple_choice', 'mcq'].includes(rawQuestionType)
@@ -4893,13 +4903,18 @@ app.post('/api/admin/quizzes/:quizId/questions/bulk', authenticateToken, authent
         : ['short_answer', 'essay', 'written'].includes(rawQuestionType)
           ? 'short_answer'
           : rawQuestionType;
-      const rawOptions = q.options;
+      const rawOptions = q.options ?? q.choices;
       const options = Array.isArray(rawOptions)
         ? rawOptions.map(option => String(option).trim())
         : typeof rawOptions === 'string'
           ? rawOptions.split('|').map(option => option.trim()).filter(Boolean)
-          : null;
-      const rawExpectedAnswer = q.expected_answer || q.model_answer || q.answer || '';
+          : rawOptions && typeof rawOptions === 'object'
+            ? ['a', 'b', 'c', 'd'].map(letter => rawOptions[letter] ?? rawOptions[letter.toUpperCase()] ?? '').filter(Boolean)
+            : ['a', 'b', 'c', 'd']
+                .map(letter => q[`option_${letter}`] ?? q[`opt_${letter}`] ?? q[letter] ?? '')
+                .filter(Boolean);
+      const rawExpectedAnswer = q.expected_answer || q.model_answer || q.modelAnswer ||
+        q.suggested_answers || q.marking_key || q.answer_key || q.answer || '';
       const expectedAnswer = typeof rawExpectedAnswer === 'string' ? rawExpectedAnswer.trim() : '';
 
       if (!questionText) {
@@ -4911,7 +4926,13 @@ app.post('/api/admin/quizzes/:quizId/questions/bulk', authenticateToken, authent
       if (questionType === 'short_answer' && !expectedAnswer) {
         return res.status(400).json({ success: false, message: `Question ${index + 1} needs a model answer (expected_answer)` });
       }
-      const correctAnswer = Number.parseInt(q.correct_answer, 10);
+      const rawCorrectAnswer = q.correct_answer ?? q.correct_option ?? q.answer_index ?? q.correct ?? q.answer;
+      const correctLetter = typeof rawCorrectAnswer === 'string'
+        ? rawCorrectAnswer.trim().match(/^(?:option\s*)?([a-d])$/i)
+        : null;
+      const correctAnswer = correctLetter
+        ? correctLetter[1].toUpperCase().charCodeAt(0) - 65
+        : Number.parseInt(rawCorrectAnswer, 10);
       if (questionType === 'multiple_choice' &&
           (!options || options.length < 2 || !Number.isInteger(correctAnswer) || correctAnswer < 0 || correctAnswer >= options.length)) {
         return res.status(400).json({
