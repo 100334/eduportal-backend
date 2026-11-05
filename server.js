@@ -244,6 +244,10 @@ function getFormName(className) {
     const formNumber = match[1];
     return `Form ${formNumber}`;
   }
+  const standardMatch = className.match(/Standard\s*(\d+)/i);
+  if (standardMatch) {
+    return `Standard ${standardMatch[1]}`;
+  }
   const numMatch = className.match(/^(\d+)/);
   if (numMatch) {
     return `Form ${numMatch[1]}`;
@@ -1175,12 +1179,7 @@ app.post('/api/admin/learners', authenticateToken, authenticateAdmin, async (req
       
       assignedClassId = classExists.id;
       
-      if (!assignedForm) {
-        const formMatch = classExists.name.match(/Form\s*(\d+)/i);
-        if (formMatch) {
-          assignedForm = `Form ${formMatch[1]}`;
-        }
-      }
+      if (!assignedForm) assignedForm = getFormName(classExists.name);
     }
     
     if (!assignedForm) {
