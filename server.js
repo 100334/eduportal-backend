@@ -2787,10 +2787,19 @@ app.get('/api/quiz/quizzes', authenticateToken, async (req, res) => {
       .select('quiz_id, status')
       .eq('learner_id', req.user.id);
 
-    // Build a map of quiz_id -> status
+    if (attemptsError) throw attemptsError;
+
+    // Keep the attempt count so retake availability matches the server limit.
     const attemptMap = {};
     (attempts || []).forEach(att => {
-      attemptMap[att.quiz_id] = att.status;
+      if (!attemptMap[att.quiz_id]) {
+        attemptMap[att.quiz_id] = { count: 0, status: att.status };
+      }
+      const state = attemptMap[att.quiz_id];
+      state.count += 1;
+      if (att.status === 'in-progress' || state.status !== 'in-progress') {
+        state.status = att.status;
+      }
     });
 
     // Enrich each quiz with attempt info and question counts
@@ -2801,8 +2810,9 @@ app.get('/api/quiz/quizzes', authenticateToken, async (req, res) => {
         .eq('quiz_id', quiz.id);
 
       const totalMarks = questions?.reduce((sum, q) => sum + (q.marks || 1), 0) || 0;
-      const status = attemptMap[quiz.id] || null;
-      const alreadyTaken = status !== null;
+      const attemptInfo = attemptMap[quiz.id] || { count: 0, status: null };
+      const status = attemptInfo.status;
+      const alreadyTaken = attemptInfo.count > 0;
       const isCompleted = status === 'completed' || status === 'submitted';
       const start = quiz.scheduled_start ? new Date(quiz.scheduled_start) : null;
       const end = quiz.scheduled_end ? new Date(quiz.scheduled_end) : null;
@@ -2816,9 +2826,12 @@ app.get('/api/quiz/quizzes', authenticateToken, async (req, res) => {
         total_marks: totalMarks,
         passing_marks: quiz.passing_points || Math.round(totalMarks * 0.5),
         already_taken: alreadyTaken,
+        attempts_used: attemptInfo.count,
+        attempts_remaining: Math.max(0, 2 - attemptInfo.count),
+        max_attempts: 2,
         attempt_status: status,
-        disabled: isCompleted && !quiz.allow_retake,
-        allow_retake: quiz.allow_retake || false,
+        disabled: isCompleted && attemptInfo.count >= 2,
+        allow_retake: isCompleted && attemptInfo.count < 2,
         scheduled_start: quiz.scheduled_start || null,
         scheduled_end: quiz.scheduled_end || null,
         quiz_status: isClosed ? 'closed' : isUpcoming ? 'upcoming' : 'open',
@@ -2957,10 +2970,10 @@ app.post('/api/quiz/:quizId/start', authenticateToken, async (req, res) => {
   try {
     const quizId = req.params.quizId; // UUID string
 
-    // 1. Check if the quiz exists and fetch allow_retake
+    // 1. Check if the quiz exists.
     const { data: quiz, error: quizError } = await supabase
       .from('quizzes')
-      .select('subject_id, subject:subject_id(name), total_marks, passing_points, allow_retake, target_form')
+      .select('subject_id, subject:subject_id(name), total_marks, passing_points, target_form')
       .eq('id', quizId)
       .maybeSingle();
 
@@ -2986,46 +2999,35 @@ app.post('/api/quiz/:quizId/start', authenticateToken, async (req, res) => {
       });
     }
 
-    // 2. Check for ANY existing attempt (any status)
-    const { data: existingAttempt } = await supabase
+    // Resume an active attempt and count every attempt, including prior retakes.
+    const { data: existingAttempts, error: attemptsError } = await supabase
       .from('quiz_attempts')
       .select('id, status')
       .eq('learner_id', req.user.id)
-      .eq('quiz_id', quizId)
-      .maybeSingle();
+      .eq('quiz_id', quizId);
 
-    if (existingAttempt) {
-      // Always allow resume of an in-progress attempt
-      if (existingAttempt.status === 'in-progress') {
-        return res.json({ success: true, attempt_id: existingAttempt.id, message: 'Resuming...' });
-      }
+    if (attemptsError) throw attemptsError;
 
-      // Submitted or completed — check allow_retake
-      if (existingAttempt.status === 'submitted' || existingAttempt.status === 'completed') {
-        if (quiz.allow_retake) {
-          // Delete the old attempt so a fresh one can be created below
-          await supabase
-            .from('quiz_attempts')
-            .delete()
-            .eq('id', existingAttempt.id);
-          // fall through to insert a new attempt
-        } else {
-          return res.status(403).json({
-            success: false,
-            message: 'You have already submitted this quiz. Multiple attempts are not allowed.',
-            attempt_id: existingAttempt.id,
-            status: existingAttempt.status
-          });
-        }
-      } else {
-        // Any other unexpected status — reject
-        return res.status(403).json({
-          success: false,
-          message: 'You have already attempted this quiz. No further attempts allowed.',
-          attempt_id: existingAttempt.id,
-          status: existingAttempt.status
-        });
-      }
+    const attempts = existingAttempts || [];
+    const inProgressAttempt = attempts.find(attempt => attempt.status === 'in-progress');
+    if (inProgressAttempt) {
+      return res.json({
+        success: true,
+        attempt_id: inProgressAttempt.id,
+        attempts_used: attempts.length,
+        attempts_remaining: Math.max(0, 2 - attempts.length),
+        message: 'Resuming...'
+      });
+    }
+
+    if (attempts.length >= 2) {
+      return res.status(403).json({
+        success: false,
+        message: 'You have used both attempts allowed for this quiz.',
+        attempts_used: attempts.length,
+        attempts_remaining: 0,
+        max_attempts: 2
+      });
     }
 
     // 3. Insert new attempt
@@ -3052,6 +3054,9 @@ app.post('/api/quiz/:quizId/start', authenticateToken, async (req, res) => {
     res.json({
       success: true,
       attempt_id: attempt.id,
+      attempts_used: attempts.length + 1,
+      attempts_remaining: Math.max(0, 1 - attempts.length),
+      max_attempts: 2,
       message: 'Quiz started successfully',
       quiz: { total_marks: quiz.total_marks, passing_marks: quiz.passing_points }
     });
@@ -3539,6 +3544,17 @@ app.get('/api/quiz/history', authenticateToken, async (req, res) => {
       return res.json({ success: true, attempts: [] });
     }
 
+    const { data: allLearnerAttempts, error: allAttemptsError } = await supabase
+      .from('quiz_attempts')
+      .select('quiz_id')
+      .eq('learner_id', req.user.id);
+    if (allAttemptsError) throw allAttemptsError;
+
+    const attemptsUsedByQuiz = {};
+    (allLearnerAttempts || []).forEach(attempt => {
+      attemptsUsedByQuiz[attempt.quiz_id] = (attemptsUsedByQuiz[attempt.quiz_id] || 0) + 1;
+    });
+
     const formattedAttempts = [];
     for (const attempt of (attempts || [])) {
       try {
@@ -3561,7 +3577,9 @@ app.get('/api/quiz/history', authenticateToken, async (req, res) => {
           completed_at: attempt.completed_at,
           time_taken: attempt.time_taken,
           feedback: attempt.feedback || null,
-          allow_retake: quiz?.allow_retake || false
+          attempts_used: attemptsUsedByQuiz[attempt.quiz_id] || 0,
+          attempts_remaining: Math.max(0, 2 - (attemptsUsedByQuiz[attempt.quiz_id] || 0)),
+          allow_retake: (attemptsUsedByQuiz[attempt.quiz_id] || 0) < 2
         });
       } catch (err) {
         console.error('Error fetching quiz details:', err);
@@ -3578,7 +3596,9 @@ app.get('/api/quiz/history', authenticateToken, async (req, res) => {
           completed_at: attempt.completed_at,
           time_taken: attempt.time_taken,
           feedback: attempt.feedback || null,
-          allow_retake: false
+          attempts_used: attemptsUsedByQuiz[attempt.quiz_id] || 0,
+          attempts_remaining: Math.max(0, 2 - (attemptsUsedByQuiz[attempt.quiz_id] || 0)),
+          allow_retake: (attemptsUsedByQuiz[attempt.quiz_id] || 0) < 2
         });
       }
     }
