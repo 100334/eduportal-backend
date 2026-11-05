@@ -2168,7 +2168,8 @@ app.post('/api/admin/quizzes', authenticateToken, authenticateAdmin, async (req,
   try {
     const { 
       subject_id, title, description, duration, total_marks, is_active, target_form,
-      section_a_marks, section_b_marks, exam_year, exam_type, scheduled_start, scheduled_end
+      section_a_marks, section_b_marks, exam_year, exam_type, scheduled_start, scheduled_end,
+      week_number, allow_retake
     } = req.body;
     
     console.log('📝 Creating new quiz:', { subject_id, title, duration, target_form, exam_year, exam_type, scheduled_start, scheduled_end });
