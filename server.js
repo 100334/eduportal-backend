@@ -206,7 +206,7 @@ function resolveQuizRouteId(quizIdParam) {
 // ── Admin notification helper ─────────────────────────────────────────────
 const createAdminNotification = async (type, title, message, related_id = null) => {
   try {
-    await supabase.from('admin_notifications').insert({
+    const { error } = await supabase.from('admin_notifications').insert({
       type,
       title,
       message,
@@ -215,6 +215,7 @@ const createAdminNotification = async (type, title, message, related_id = null) 
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     });
+    if (error) throw error;
   } catch (err) {
     console.error('createAdminNotification error:', err.message);
   }
@@ -1714,6 +1715,87 @@ app.post('/api/admin/subjects', authenticateToken, authenticateAdmin, async (req
   }
 });
 
+// Add the core primary subjects to every existing Standard 1–8 class.
+app.post('/api/admin/subjects/primary-standards', authenticateToken, authenticateAdmin, async (req, res) => {
+  const primarySubjectNames = ['Social Studies', 'Primary Science', 'Arts/Life Skills'];
+
+  try {
+    const { data: classes, error: classesError } = await supabase
+      .from('classes')
+      .select('id, name');
+    if (classesError) throw classesError;
+
+    const primaryClasses = (classes || []).filter(classItem =>
+      /^Standard\s*[1-8](?:\s*[a-z])?\s*$/i.test(String(classItem.name || '').trim())
+    );
+    if (primaryClasses.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'No Standard 1–8 classes found. Create primary classes before adding these subjects.',
+      });
+    }
+
+    const classIds = primaryClasses.map(classItem => classItem.id);
+    const { data: existingSubjects, error: subjectsError } = await supabase
+      .from('subjects')
+      .select('class_id, name, display_order')
+      .in('class_id', classIds);
+    if (subjectsError) throw subjectsError;
+
+    const subjectsToInsert = [];
+    for (const classItem of primaryClasses) {
+      const classSubjects = (existingSubjects || []).filter(subject =>
+        String(subject.class_id) === String(classItem.id)
+      );
+      const existingNames = new Set(classSubjects.map(subject => String(subject.name || '').trim().toLowerCase()));
+      let nextDisplayOrder = classSubjects.reduce(
+        (max, subject) => Math.max(max, Number(subject.display_order) || 0),
+        0
+      ) + 1;
+
+      for (const name of primarySubjectNames) {
+        if (existingNames.has(name.toLowerCase())) continue;
+        subjectsToInsert.push({
+          class_id: classItem.id,
+          name,
+          display_order: nextDisplayOrder++,
+          status: 'Active',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        });
+      }
+    }
+
+    if (subjectsToInsert.length > 0) {
+      const { error: insertError } = await supabase.from('subjects').insert(subjectsToInsert);
+      if (insertError) throw insertError;
+    }
+
+    const createdClassCount = new Set(subjectsToInsert.map(subject => String(subject.class_id))).size;
+    await logAdminAction(
+      req.user.id,
+      'ADD_PRIMARY_SUBJECTS',
+      `Added ${subjectsToInsert.length} primary subjects across ${createdClassCount} Standard 1–8 classes`,
+      req.ip
+    );
+
+    res.json({
+      success: true,
+      created_count: subjectsToInsert.length,
+      class_count: primaryClasses.length,
+      message: subjectsToInsert.length === 0
+        ? 'These primary subjects already exist in every Standard 1–8 class.'
+        : `Added ${subjectsToInsert.length} subjects across ${createdClassCount} Standard 1–8 classes. Existing subjects were left unchanged.`,
+    });
+  } catch (err) {
+    console.error('Error adding primary subjects:', err);
+    res.status(500).json({
+      success: false,
+      message: 'Could not add primary subjects: ' + err.message,
+    });
+  }
+});
+
 // Update a subject
 app.put('/api/admin/subjects/:subjectId', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
@@ -1826,24 +1908,20 @@ app.delete('/api/admin/subjects/:subjectId', authenticateToken, authenticateAdmi
 
 // Get unread notifications for admin
 app.get('/api/admin/notifications', authenticateToken, authenticateAdmin, async (req, res) => {
+  res.set('Cache-Control', 'no-store');
   try {
-    // Use admin_notifications table which stores UUID user_ids
     const { data: notifications, error } = await supabase
       .from('admin_notifications')
       .select('*')
       .order('created_at', { ascending: false })
       .limit(50);
 
-    if (error) {
-      // Table may not exist yet — return empty silently
-      console.warn('admin_notifications fetch error:', error.message);
-      return res.json({ success: true, notifications: [] });
-    }
+    if (error) throw error;
 
     res.json({ success: true, notifications: notifications || [] });
   } catch (error) {
     console.error('Admin notifications error:', error);
-    res.json({ success: true, notifications: [] });
+    res.status(500).json({ success: false, message: 'Could not load admin notifications.' });
   }
 });
 
