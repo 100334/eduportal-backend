@@ -4318,12 +4318,29 @@ app.get('/api/learner/lesson/:lessonId', authenticateToken, async (req, res) => 
 app.get('/api/library/notes', authenticateToken, async (req, res) => {
   res.set('Cache-Control', 'no-store');
   try {
-    // Fetch all lessons that have a PDF — these serve as library notes
-    const { data: lessons, error } = await supabase
+    // Keep secondary-form PDFs out of primary learners' library results.
+    let lessonsQuery = supabase
       .from('lessons')
       .select('*')
-      .not('pdf_url', 'is', null)
-      .order('created_at', { ascending: false });
+      .not('pdf_url', 'is', null);
+
+    if (req.user.role === 'learner') {
+      const { data: learner, error: learnerError } = await supabase
+        .from('learners')
+        .select('form')
+        .eq('id', req.user.id)
+        .maybeSingle();
+      if (learnerError) throw learnerError;
+
+      if (/^standard\s*[1-8](?:\s*[a-z])?\s*$/i.test(String(learner?.form || '').trim())) {
+        lessonsQuery = lessonsQuery.in('target_form', [
+          'All',
+          ...Array.from({ length: 8 }, (_, index) => `Standard ${index + 1}`),
+        ]);
+      }
+    }
+
+    const { data: lessons, error } = await lessonsQuery.order('created_at', { ascending: false });
     if (error) throw error;
 
     // Fetch all subjects for name lookup
