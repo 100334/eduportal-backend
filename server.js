@@ -1536,6 +1536,52 @@ app.delete('/api/admin/attempts/:attemptId/reset', authenticateToken, authentica
   }
 });
 
+// Reset every attempt for this learner and quiz so they receive a clean retake allowance.
+app.post('/api/admin/attempts/:attemptId/reset', authenticateToken, authenticateAdmin, async (req, res) => {
+  try {
+    const { attemptId } = req.params;
+    if (!attemptId || attemptId.trim() === '') {
+      return res.status(400).json({ success: false, message: 'Invalid attempt ID' });
+    }
+
+    const { data: attempt, error: fetchError } = await supabase
+      .from('quiz_attempts')
+      .select('id, learner_id, quiz_id')
+      .eq('id', attemptId)
+      .maybeSingle();
+
+    if (fetchError) throw fetchError;
+    if (!attempt) {
+      return res.status(404).json({ success: false, message: 'Attempt not found' });
+    }
+
+    const { data: deletedAttempts, error: deleteError } = await supabase
+      .from('quiz_attempts')
+      .delete()
+      .eq('learner_id', attempt.learner_id)
+      .eq('quiz_id', attempt.quiz_id)
+      .select('id');
+
+    if (deleteError) throw deleteError;
+
+    await logAdminAction(
+      req.user.id,
+      'RESET_QUIZ_ATTEMPT',
+      `Reset all ${deletedAttempts.length} attempt(s) for learner ${attempt.learner_id} on quiz ${attempt.quiz_id}`,
+      req.ip
+    );
+
+    res.json({
+      success: true,
+      deleted_attempts: deletedAttempts.length,
+      message: 'Test reset. The learner can start afresh with both attempts available.'
+    });
+  } catch (error) {
+    console.error('Reset learner quiz error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 
 // ============================================
 // SUBJECT MANAGEMENT ROUTES
