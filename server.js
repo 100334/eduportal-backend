@@ -4795,7 +4795,7 @@ app.post('/api/admin/ai-parse-questions', authenticateToken, authenticateAdmin, 
 
 Extract ALL questions from the text below and return them as a JSON array.
 For multiple choice questions, identify the options and which is correct.
-For short answer / essay questions, include the expected answer if visible.
+For short answer / essay questions, extract the model answer or marking-key answers when present. Preserve alternative acceptable answers as a string separated by newlines.
 
 Rules:
 - Return ONLY a valid JSON array, no markdown, no explanation
@@ -4882,23 +4882,62 @@ app.post('/api/admin/quizzes/:quizId/questions/bulk', authenticateToken, authent
       .limit(1);
     let nextOrder = (existing?.[0]?.display_order || 0) + 1;
 
-    const toInsert = questions.map((q, i) => ({
-      quiz_id:        quizId,
-      question_text:  (q.question_text || q.question || '').trim(),
-      question_type:  q.question_type || (q.options ? 'multiple_choice' : 'short_answer'),
-      options:        q.options || null,
-      correct_answer: q.correct_answer !== undefined ? parseInt(q.correct_answer) : null,
-      expected_answer: q.expected_answer || q.answer || null,
-      explanation:    q.explanation || null,
-      marks:          parseInt(q.marks) || 1,
-      points:         parseInt(q.marks) || 1,
-      section:        q.section || 'A',
-      display_order:  nextOrder + i,
-      created_at:     new Date().toISOString(),
-    })).filter(q => q.question_text); // skip blank questions
+    const toInsert = [];
+    for (const [index, q] of questions.entries()) {
+      const questionText = String(q.question_text || q.question || '').trim();
+      const rawQuestionType = String(q.question_type || q.type || (q.options ? 'multiple_choice' : 'short_answer'))
+        .toLowerCase()
+        .replace(/[-\s]+/g, '_');
+      const questionType = ['multiple_choice', 'mcq'].includes(rawQuestionType)
+        ? 'multiple_choice'
+        : ['short_answer', 'essay', 'written'].includes(rawQuestionType)
+          ? 'short_answer'
+          : rawQuestionType;
+      const rawOptions = q.options;
+      const options = Array.isArray(rawOptions)
+        ? rawOptions.map(option => String(option).trim())
+        : typeof rawOptions === 'string'
+          ? rawOptions.split('|').map(option => option.trim()).filter(Boolean)
+          : null;
+      const rawExpectedAnswer = q.expected_answer || q.model_answer || q.answer || '';
+      const expectedAnswer = typeof rawExpectedAnswer === 'string' ? rawExpectedAnswer.trim() : '';
 
-    if (toInsert.length === 0) {
-      return res.status(400).json({ success: false, message: 'No valid questions found in import data' });
+      if (!questionText) {
+        return res.status(400).json({ success: false, message: `Question ${index + 1} is missing question text` });
+      }
+      if (!['multiple_choice', 'short_answer'].includes(questionType)) {
+        return res.status(400).json({ success: false, message: `Question ${index + 1} has unsupported question_type` });
+      }
+      if (questionType === 'short_answer' && !expectedAnswer) {
+        return res.status(400).json({ success: false, message: `Question ${index + 1} needs a model answer (expected_answer)` });
+      }
+      const correctAnswer = Number.parseInt(q.correct_answer, 10);
+      if (questionType === 'multiple_choice' &&
+          (!options || options.length < 2 || !Number.isInteger(correctAnswer) || correctAnswer < 0 || correctAnswer >= options.length)) {
+        return res.status(400).json({
+          success: false,
+          message: `Question ${index + 1} needs at least two options and a valid correct_answer index`
+        });
+      }
+
+      const marks = Number.parseInt(q.marks, 10) || 1;
+      toInsert.push({
+        quiz_id:         quizId,
+        question_text:   questionText,
+        question_type:   questionType,
+        options:         questionType === 'multiple_choice' ? options : null,
+        correct_answer:  questionType === 'multiple_choice' ? correctAnswer : null,
+        expected_answer: questionType === 'short_answer' ? expectedAnswer : null,
+        explanation:     q.explanation || null,
+        question_image:  q.question_image || null,
+        option_images:   q.option_images || [],
+        answer_image:    q.answer_image || null,
+        marks,
+        points:          marks,
+        section:         q.section === 'B' ? 'B' : 'A',
+        display_order:   nextOrder + index,
+        created_at:      new Date().toISOString(),
+      });
     }
 
     const { data: inserted, error: insertErr } = await supabase
