@@ -1717,7 +1717,7 @@ app.post('/api/admin/subjects', authenticateToken, authenticateAdmin, async (req
 
 // Add the core primary subjects to every existing Standard 1–8 class.
 app.post('/api/admin/subjects/primary-standards', authenticateToken, authenticateAdmin, async (req, res) => {
-  const primarySubjectNames = ['Social Studies', 'Primary Science', 'Arts/Life Skills'];
+  const primarySubjectNames = ['Social Studies', 'Primary Science', 'Science and Technology', 'Arts/Life Skills'];
 
   try {
     const { data: classes, error: classesError } = await supabase
