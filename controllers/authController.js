@@ -253,6 +253,12 @@ exports.learnerLogin = async (req, res, next) => {
       });
     }
 
+    const { error: visitError } = await supabase
+      .from('learner_login_visits')
+      .insert({ learner_id: learner.id });
+
+    if (visitError) throw visitError;
+
     console.log('✅ Login successful for:', learner.name);
     console.log('Match strategy:', matchStrategy);
 

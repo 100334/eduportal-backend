@@ -6942,119 +6942,45 @@ app.get('/api/learner/profile', authenticateToken, async (req, res) => {
 
 app.get('/api/learner/attendance', authenticateToken, async (req, res) => {
   try {
-    console.log(`📅 Fetching attendance for learner: ${req.user.id}`);
-    
-    const { data: learner, error: learnerError } = await supabase
-      .from('learners')
-      .select('id, name, reg_number, form, class_id')
-      .eq('id', parseInt(req.user.id))
-      .maybeSingle();
-    
-    if (learnerError || !learner) {
-      console.error('Learner not found:', req.user.id);
-      return res.json({
-        success: true,
-        data: {
-          stats: { total: 0, present: 0, absent: 0, late: 0, rate: 0 },
-          records: []
-        }
-      });
+    if (req.user.role !== 'learner') {
+      return res.status(403).json({ success: false, message: 'Learner access required.' });
     }
-    
-    console.log('Found learner:', learner.name);
-    
-    const { data: attendance, error } = await supabase
-      .from('attendance')
-      .select('*')
-      .eq('learner_id', parseInt(req.user.id))
-      .order('date', { ascending: false });
-    
-    if (error) {
-      console.error('Error fetching attendance:', error);
-      return res.json({
-        success: true,
-        data: {
-          stats: { total: 0, present: 0, absent: 0, late: 0, rate: 0 },
-          records: []
-        }
-      });
+
+    const learnerId = Number(req.user.id);
+    if (!Number.isInteger(learnerId) || learnerId <= 0) {
+      return res.status(401).json({ success: false, message: 'Invalid learner identity.' });
     }
-    
-    console.log(`Found ${attendance?.length || 0} attendance records for learner`);
-    
-    const totalRecords = attendance?.length || 0;
-    const presentCount = attendance?.filter(a => a.status === 'present').length || 0;
-    const absentCount = attendance?.filter(a => a.status === 'absent').length || 0;
-    const lateCount = attendance?.filter(a => a.status === 'late').length || 0;
-    
-    const attendedCount = presentCount + lateCount;
-    const attendanceRate = totalRecords > 0 ? Math.round((attendedCount / totalRecords) * 100) : 0;
-    
-    const formattedRecords = (attendance || []).map(record => ({
-      id: record.id,
-      learner_id: record.learner_id,
-      date: record.date,
-      status: record.status,
-      term: record.term || 1,
-      year: record.year || new Date().getFullYear(),
-      recorded_at: record.created_at || record.updated_at,
-      status_display: record.status === 'present' ? 'Present' : 
-                      record.status === 'late' ? 'Late' : 'Absent',
-      status_color: record.status === 'present' ? 'green' : 
-                    record.status === 'late' ? 'yellow' : 'red',
-      date_formatted: new Date(record.date).toLocaleDateString('en', {
-        weekday: 'long',
-        year: 'numeric',
-        month: 'long',
-        day: 'numeric'
-      })
+
+    const { data: visits, count, error } = await supabase
+      .from('learner_login_visits')
+      .select('id, learner_id, logged_in_at', { count: 'exact' })
+      .eq('learner_id', learnerId)
+      .order('logged_in_at', { ascending: false })
+      .limit(100);
+
+    if (error) throw error;
+
+    const records = (visits || []).map(visit => ({
+      id: visit.id,
+      learner_id: visit.learner_id,
+      date: visit.logged_in_at,
+      logged_in_at: visit.logged_in_at,
+      status: 'visit',
+      status_display: 'Login'
     }));
-    
-    const recordsByTerm = {};
-    formattedRecords.forEach(record => {
-      const termKey = `Term ${record.term} ${record.year}`;
-      if (!recordsByTerm[termKey]) {
-        recordsByTerm[termKey] = [];
-      }
-      recordsByTerm[termKey].push(record);
-    });
-    
-    const stats = {
-      total: totalRecords,
-      present: presentCount,
-      absent: absentCount,
-      late: lateCount,
-      rate: attendanceRate,
-      attended: attendedCount,
-      present_percentage: totalRecords > 0 ? Math.round((presentCount / totalRecords) * 100) : 0,
-      late_percentage: totalRecords > 0 ? Math.round((lateCount / totalRecords) * 100) : 0,
-      absent_percentage: totalRecords > 0 ? Math.round((absentCount / totalRecords) * 100) : 0
-    };
-    
-    console.log('Attendance stats:', stats);
-    
+
     res.json({
       success: true,
       data: {
-        stats: stats,
-        records: formattedRecords,
-        by_term: recordsByTerm,
-        summary: {
-          total_days: totalRecords,
-          present_days: presentCount,
-          late_days: lateCount,
-          absent_days: absentCount,
-          attendance_rate: attendanceRate
-        }
+        stats: { total: count ?? 0, visits: count ?? 0 },
+        records
       }
     });
-    
   } catch (error) {
-    console.error('Error in learner attendance endpoint:', error);
+    console.error('Error fetching learner visit history:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to fetch attendance records',
-      error: error.message
+      message: 'Failed to fetch learner visit history'
     });
   }
 });
