@@ -3528,27 +3528,29 @@ app.post('/api/quiz/:quizId/submit', authenticateToken, async (req, res) => {
     });
     if (notificationError) console.error('Quiz result notification error:', notificationError.message);
 
-    // (Optional) Notify admins
-    const { data: learner } = await supabase
+    // Notify admins for every completed submission, even if display metadata is unavailable.
+    const { data: learner, error: learnerLookupError } = await supabase
       .from('learners')
       .select('name')
       .eq('id', learnerId)
       .single();
-    const { data: quizTitle } = await supabase
+    const { data: quizTitle, error: quizLookupError } = await supabase
       .from('quizzes')
       .select('title')
       .eq('id', quizId)
       .single();
 
-    if (learner && quizTitle) {
-      // Use admin_notifications (UUID-safe) instead of the learner notifications table
-      await createAdminNotification(
-        'quiz_graded',
-        'Quiz Auto-Graded',
-        `${learner.name}'s "${quizTitle.title}" was auto-graded: ${earnedMarks}/${totalMarks} (${percentage}%).`,
-        attempt_id
-      );
-    }
+    if (learnerLookupError) console.error('Quiz submit learner lookup error:', learnerLookupError.message);
+    if (quizLookupError) console.error('Quiz submit title lookup error:', quizLookupError.message);
+
+    const learnerName = learner?.name || req.user.name || `Learner ${learnerId}`;
+    const quizName = quizTitle?.title || `Quiz ${quizId}`;
+    await createAdminNotification(
+      'quiz_submitted',
+      'Quiz Submitted',
+      `${learnerName} submitted "${quizName}". Score: ${earnedMarks}/${totalMarks} (${percentage}%).`,
+      attempt_id
+    );
 
     res.json({
       success: true,
