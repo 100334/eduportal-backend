@@ -474,6 +474,12 @@ app.post('/api/auth/learner/login', async (req, res) => {
         message: 'Invalid name or registration number.' 
       });
     }
+
+    const { error: visitError } = await supabase
+      .from('learner_login_visits')
+      .insert({ learner_id: learner.id });
+
+    if (visitError) throw visitError;
     
     const token = Buffer.from(JSON.stringify({ 
       id: learner.id, 
