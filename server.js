@@ -428,6 +428,27 @@ app.post('/api/auth/teacher/login', async (req, res) => {
 });
 
 // Learner login
+const getLoginDeviceInfo = (userAgent = '') => {
+  const browser = /Edg\//i.test(userAgent) ? 'Edge'
+    : /OPR\//i.test(userAgent) ? 'Opera'
+    : /SamsungBrowser/i.test(userAgent) ? 'Samsung Internet'
+    : /Firefox\//i.test(userAgent) ? 'Firefox'
+    : /Chrome\//i.test(userAgent) ? 'Chrome'
+    : /Safari\//i.test(userAgent) ? 'Safari'
+    : 'Unknown browser';
+
+  const platform = /iPad|Tablet/i.test(userAgent) ? 'tablet'
+    : /iPhone|iPod|Android.*Mobile|Mobile/i.test(userAgent) ? 'phone'
+    : /Windows NT/i.test(userAgent) ? 'Windows computer'
+    : /Macintosh|Mac OS X/i.test(userAgent) ? 'Mac computer'
+    : /CrOS/i.test(userAgent) ? 'Chromebook'
+    : /Android/i.test(userAgent) ? 'Android device'
+    : /Linux/i.test(userAgent) ? 'Linux computer'
+    : 'device';
+
+  return `${browser} on ${platform}`;
+};
+
 app.post('/api/auth/learner/login', async (req, res) => {
   try {
     const { name, regNumber } = req.body;
@@ -477,7 +498,10 @@ app.post('/api/auth/learner/login', async (req, res) => {
 
     const { error: visitError } = await supabase
       .from('learner_login_visits')
-      .insert({ learner_id: learner.id });
+      .insert({
+        learner_id: learner.id,
+        device_info: getLoginDeviceInfo(req.get('user-agent'))
+      });
 
     if (visitError) throw visitError;
     
@@ -6959,7 +6983,7 @@ app.get('/api/learner/attendance', authenticateToken, async (req, res) => {
 
     const { data: visits, count, error } = await supabase
       .from('learner_login_visits')
-      .select('id, learner_id, logged_in_at', { count: 'exact' })
+      .select('id, learner_id, logged_in_at, device_info', { count: 'exact' })
       .eq('learner_id', learnerId)
       .order('logged_in_at', { ascending: false })
       .limit(100);
@@ -6971,6 +6995,7 @@ app.get('/api/learner/attendance', authenticateToken, async (req, res) => {
       learner_id: visit.learner_id,
       date: visit.logged_in_at,
       logged_in_at: visit.logged_in_at,
+      device_info: visit.device_info || 'Unknown device',
       status: 'visit',
       status_display: 'Login'
     }));
