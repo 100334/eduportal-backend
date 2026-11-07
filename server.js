@@ -203,6 +203,43 @@ function resolveQuizRouteId(quizIdParam) {
   return { ok: false, message: 'Quiz ID must be a number or UUID' };
 }
 
+const recalculateQuizMarks = async (quizId) => {
+  const { data: questions, error: questionsError } = await supabase
+    .from('quiz_questions')
+    .select('marks, points, section')
+    .eq('quiz_id', quizId);
+
+  if (questionsError) throw questionsError;
+
+  const totals = (questions || []).reduce((result, question) => {
+    const rawMarks = question.marks ?? question.points ?? 1;
+    const marks = Number(rawMarks);
+    const safeMarks = Number.isFinite(marks) ? marks : 0;
+    result.total += safeMarks;
+    if (String(question.section || 'A').toUpperCase() === 'B') {
+      result.sectionB += safeMarks;
+    } else {
+      result.sectionA += safeMarks;
+    }
+    return result;
+  }, { total: 0, sectionA: 0, sectionB: 0 });
+
+  const { error: updateError } = await supabase
+    .from('quizzes')
+    .update({
+      total_marks: totals.total,
+      total_points: totals.total,
+      passing_points: Math.round(totals.total * 0.5),
+      section_a_marks: totals.sectionA,
+      section_b_marks: totals.sectionB,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', quizId);
+
+  if (updateError) throw updateError;
+  return totals;
+};
+
 // ── Admin notification helper ─────────────────────────────────────────────
 const createAdminNotification = async (type, title, message, related_id = null) => {
   try {
@@ -2320,8 +2357,8 @@ app.get('/api/admin/quizzes', authenticateToken, authenticateAdmin, async (req, 
 app.post('/api/admin/quizzes', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
     const { 
-      subject_id, title, description, duration, total_marks, is_active, target_form,
-      section_a_marks, section_b_marks, exam_year, exam_type, scheduled_start, scheduled_end,
+      subject_id, title, description, duration, is_active, target_form,
+      exam_year, exam_type, scheduled_start, scheduled_end,
       week_number, allow_retake
     } = req.body;
     
@@ -2361,9 +2398,9 @@ app.post('/api/admin/quizzes', authenticateToken, authenticateAdmin, async (req,
         title: title.trim(),
         description: description || null,
         duration: parseInt(duration) || 30,
-        total_marks: parseInt(total_marks) || 0,
-        section_a_marks: parseInt(section_a_marks) || 75,
-        section_b_marks: parseInt(section_b_marks) || 25,
+        total_marks: 0,
+        section_a_marks: 0,
+        section_b_marks: 0,
         is_active: is_active !== false,
         target_form: target_form || 'All',
         exam_year: exam_year || new Date().getFullYear(),
@@ -2613,26 +2650,7 @@ app.post('/api/admin/quizzes/:quizId/questions', authenticateToken, authenticate
       });
     }
 
-    // Update total marks for the quiz
-    const { data: questions } = await supabase
-      .from('quiz_questions')
-      .select('marks')
-      .eq('quiz_id', quizId);
-
-    if (questions && questions.length > 0) {
-      const totalMarks = questions.reduce((sum, q) => sum + (q.marks || 1), 0);
-      const passingPoints = Math.round(totalMarks * 0.5);
-      
-      await supabase
-        .from('quizzes')
-        .update({ 
-          total_marks: totalMarks,
-          total_points: totalMarks,
-          passing_points: passingPoints,
-          updated_at: new Date().toISOString() 
-        })
-        .eq('id', quizId);
-    }
+    await recalculateQuizMarks(quizId);
 
     console.log('✅ Question added successfully');
     
@@ -2725,19 +2743,7 @@ app.put('/api/admin/quizzes/:quizId/questions/:questionId', authenticateToken, a
       return res.status(500).json({ success: false, message: updateError.message });
     }
 
-    // Recalculate total marks for the quiz
-    const { data: questions } = await supabase
-      .from('quiz_questions')
-      .select('marks')
-      .eq('quiz_id', quizId);
-    if (questions && questions.length) {
-      const totalMarks = questions.reduce((sum, q) => sum + (q.marks || 1), 0);
-      const passingPoints = Math.round(totalMarks * 0.5);
-      await supabase
-        .from('quizzes')
-        .update({ total_marks: totalMarks, total_points: totalMarks, passing_points: passingPoints, updated_at: new Date().toISOString() })
-        .eq('id', quizId);
-    }
+    await recalculateQuizMarks(quizId);
 
     await logAdminAction(req.user.id, 'UPDATE_QUESTION', `Updated question ${questionId} in quiz ${quizId}`, req.ip);
     res.json({ success: true, message: 'Question updated', question: updated });
@@ -2767,25 +2773,7 @@ app.delete('/api/admin/quizzes/:quizId/questions/:questionId', authenticateToken
       throw error;
     }
 
-    // Recalculate total marks
-    const { data: questions } = await supabase
-      .from('quiz_questions')
-      .select('marks')
-      .eq('quiz_id', quizId);
-    if (questions && questions.length) {
-      const totalMarks = questions.reduce((sum, q) => sum + (q.marks || 1), 0);
-      const passingPoints = Math.round(totalMarks * 0.5);
-      await supabase
-        .from('quizzes')
-        .update({ total_marks: totalMarks, total_points: totalMarks, passing_points: passingPoints, updated_at: new Date().toISOString() })
-        .eq('id', quizId);
-    } else {
-      // No questions left, reset quiz total marks to 0
-      await supabase
-        .from('quizzes')
-        .update({ total_marks: 0, total_points: 0, passing_points: 0, updated_at: new Date().toISOString() })
-        .eq('id', quizId);
-    }
+    await recalculateQuizMarks(quizId);
 
     await logAdminAction(req.user.id, 'DELETE_QUESTION', `Deleted question ${questionId} from quiz ${quizId}`, req.ip);
     res.json({ success: true, message: 'Question deleted' });
@@ -2800,8 +2788,8 @@ app.put('/api/admin/quizzes/:quizId', authenticateToken, authenticateAdmin, asyn
   try {
     const { quizId } = req.params;
     const { 
-      subject_id, title, description, duration, total_marks, is_active, target_form,
-      section_a_marks, section_b_marks, exam_year, exam_type, scheduled_start, scheduled_end,
+      subject_id, title, description, duration, is_active, target_form,
+      exam_year, exam_type, scheduled_start, scheduled_end,
       week_number, allow_retake
     } = req.body;
     
@@ -2810,9 +2798,6 @@ app.put('/api/admin/quizzes/:quizId', authenticateToken, authenticateAdmin, asyn
     if (title !== undefined) updateData.title = title;
     if (description !== undefined) updateData.description = description;
     if (duration !== undefined) updateData.duration = duration;
-    if (total_marks !== undefined) updateData.total_marks = total_marks;
-    if (section_a_marks !== undefined) updateData.section_a_marks = parseInt(section_a_marks);
-    if (section_b_marks !== undefined) updateData.section_b_marks = parseInt(section_b_marks);
     if (is_active !== undefined) updateData.is_active = is_active;
     if (target_form !== undefined) updateData.target_form = target_form;
     if (exam_year !== undefined) updateData.exam_year = exam_year;
@@ -2822,6 +2807,8 @@ app.put('/api/admin/quizzes/:quizId', authenticateToken, authenticateAdmin, asyn
     if (week_number !== undefined) updateData.week_number = parseInt(week_number) || 1;
     if (allow_retake !== undefined) updateData.allow_retake = !!allow_retake;
     updateData.updated_at = new Date().toISOString();
+
+    await recalculateQuizMarks(quizId);
     
     const { data: quiz, error } = await supabase
       .from('quizzes')
@@ -3026,16 +3013,23 @@ app.get('/api/quiz/:quizId/questions', authenticateToken, async (req, res) => {
 
     console.log(`📝 Fetching questions for quiz ID: ${numericQuizId}`);
 
-    // Fetch quiz details with subject
-    const { data: quiz, error: quizError } = await supabase
-      .from('quizzes')
-      .select(`
-        *,
-        subject:subject_id(id, name)
-      `)
-      .eq('id', numericQuizId)
-      .single();
+    const [quizResult, learnerResult] = await Promise.all([
+      supabase
+        .from('quizzes')
+        .select(`
+          *,
+          subject:subject_id(id, name)
+        `)
+        .eq('id', numericQuizId)
+        .single(),
+      supabase
+        .from('learners')
+        .select('form')
+        .eq('id', req.user.id)
+        .single(),
+    ]);
 
+    const { data: quiz, error: quizError } = quizResult;
     if (quizError) {
       console.error('Quiz fetch error:', quizError);
       return res.status(404).json({
@@ -3044,12 +3038,7 @@ app.get('/api/quiz/:quizId/questions', authenticateToken, async (req, res) => {
       });
     }
 
-    const { data: learner, error: learnerError } = await supabase
-      .from('learners')
-      .select('form')
-      .eq('id', req.user.id)
-      .single();
-
+    const { data: learner, error: learnerError } = learnerResult;
     if (learnerError || !learner) {
       return res.status(404).json({ success: false, message: 'Learner not found' });
     }
@@ -3061,14 +3050,21 @@ app.get('/api/quiz/:quizId/questions', authenticateToken, async (req, res) => {
       });
     }
 
-    // Fetch questions
-    const { data: questions, error: questionsError } = await supabase
-      .from('quiz_questions')
-      .select('*')
-      .eq('quiz_id', numericQuizId)
-      .order('display_order', { ascending: true })
-      .order('created_at', { ascending: true });
-
+    const [questionsResult, attemptResult] = await Promise.all([
+      supabase
+        .from('quiz_questions')
+        .select('id, question_text, question_image, option_images, answer_image, question_type, marks, points, display_order, section, options')
+        .eq('quiz_id', numericQuizId)
+        .order('display_order', { ascending: true })
+        .order('created_at', { ascending: true }),
+      supabase
+        .from('quiz_attempts')
+        .select('id, status, score, earned_points, total_points, passed, answers')
+        .eq('learner_id', req.user.id)
+        .eq('quiz_id', numericQuizId)
+        .maybeSingle(),
+    ]);
+    const { data: questions, error: questionsError } = questionsResult;
     if (questionsError) {
       console.error('Questions fetch error:', questionsError);
       return res.status(500).json({
@@ -3077,14 +3073,7 @@ app.get('/api/quiz/:quizId/questions', authenticateToken, async (req, res) => {
       });
     }
 
-    // Check for existing attempt (use numericQuizId)
-    const { data: existingAttempt, error: attemptError } = await supabase
-      .from('quiz_attempts')
-      .select('id, status, score, earned_points, total_points, passed, answers')
-      .eq('learner_id', req.user.id)
-      .eq('quiz_id', numericQuizId)
-      .maybeSingle();
-
+    const { data: existingAttempt, error: attemptError } = attemptResult;
     if (attemptError) {
       console.error('Attempt fetch error:', attemptError);
       // Non-critical, continue without saved answers
@@ -3131,24 +3120,26 @@ app.post('/api/quiz/:quizId/start', authenticateToken, async (req, res) => {
   try {
     const quizId = req.params.quizId; // UUID string
 
-    // 1. Check if the quiz exists.
-    const { data: quiz, error: quizError } = await supabase
-      .from('quizzes')
-      .select('subject_id, subject:subject_id(name), total_marks, passing_points, target_form')
-      .eq('id', quizId)
-      .maybeSingle();
+    const [quizResult, learnerResult] = await Promise.all([
+      supabase
+        .from('quizzes')
+        .select('subject_id, subject:subject_id(name), total_marks, passing_points, target_form')
+        .eq('id', quizId)
+        .maybeSingle(),
+      supabase
+        .from('learners')
+        .select('form')
+        .eq('id', req.user.id)
+        .single(),
+    ]);
 
+    const { data: quiz, error: quizError } = quizResult;
     if (quizError || !quiz) {
       console.error('Quiz not found:', quizId);
       return res.status(404).json({ success: false, message: 'Quiz not found' });
     }
 
-    const { data: learner, error: learnerError } = await supabase
-      .from('learners')
-      .select('form')
-      .eq('id', req.user.id)
-      .single();
-
+    const { data: learner, error: learnerError } = learnerResult;
     if (learnerError || !learner) {
       return res.status(404).json({ success: false, message: 'Learner not found' });
     }
@@ -5263,6 +5254,8 @@ app.post('/api/admin/quizzes/:quizId/questions/bulk', authenticateToken, authent
       .insert(toInsert)
       .select();
     if (insertErr) throw insertErr;
+
+    await recalculateQuizMarks(quizId);
 
     res.json({ success: true, inserted: inserted.length, message: `${inserted.length} question${inserted.length !== 1 ? 's' : ''} imported successfully` });
   } catch (err) {
