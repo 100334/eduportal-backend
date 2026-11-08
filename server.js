@@ -1180,16 +1180,33 @@ app.delete('/api/admin/classes/:classId', authenticateToken, authenticateAdmin, 
 // Get all learners
 app.get('/api/admin/learners', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
-    const { data: learners, error } = await supabase
-      .from('learners')
-      .select('*')
-      .order('name', { ascending: true });
-    
+    const { error: refundError } = await supabase.rpc('refund_expired_quiz_attempts', {
+      p_learner_id: null,
+    });
+    if (refundError) throw refundError;
+
+    const [{ data: learners, error }, { data: wallets, error: walletError }] = await Promise.all([
+      supabase
+        .from('learners')
+        .select('*')
+        .order('name', { ascending: true }),
+      supabase.from('learner_quiz_wallets').select('learner_id, balance_mwk'),
+    ]);
+
     if (error) throw error;
+    if (walletError) throw walletError;
+
+    const walletBalances = new Map(
+      (wallets || []).map(wallet => [wallet.learner_id, Number(wallet.balance_mwk)])
+    );
+    const learnersWithWallets = (learners || []).map(learner => ({
+      ...learner,
+      wallet_balance_mwk: walletBalances.get(learner.id) || 0,
+    }));
     
     res.json({
       success: true,
-      learners: learners || []
+      learners: learnersWithWallets
     });
   } catch (err) {
     console.error('Error fetching learners:', err);
@@ -1198,6 +1215,42 @@ app.get('/api/admin/learners', authenticateToken, authenticateAdmin, async (req,
       message: 'Database error',
       error: err.message
     });
+  }
+});
+
+app.post('/api/admin/learners/:learnerId/quiz-wallet/credit', authenticateToken, authenticateAdmin, async (req, res) => {
+  try {
+    const learnerId = Number(req.params.learnerId);
+    const amountMwk = Number(req.body.amount_mwk);
+    const reason = String(req.body.reason || '').trim();
+
+    if (!Number.isSafeInteger(learnerId) || learnerId <= 0) {
+      return res.status(400).json({ success: false, message: 'Invalid learner ID.' });
+    }
+    if (!Number.isSafeInteger(amountMwk) || amountMwk <= 0 || amountMwk > 1000000000) {
+      return res.status(400).json({ success: false, message: 'Credit must be a positive whole number of Mk, up to Mk1,000,000,000.' });
+    }
+    if (!reason || reason.length > 200) {
+      return res.status(400).json({ success: false, message: 'Enter a reason of 1 to 200 characters.' });
+    }
+
+    const { data, error } = await supabase.rpc('credit_learner_quiz_wallet', {
+      p_learner_id: learnerId,
+      p_amount_mwk: amountMwk,
+      p_reason: reason,
+      p_admin_id: String(req.user.id),
+    });
+
+    if (error) throw error;
+
+    res.json({
+      success: true,
+      balance_mwk: Number(data.balance_mwk),
+      message: `Mk${amountMwk} credit added.`,
+    });
+  } catch (error) {
+    console.error('Error crediting learner quiz wallet:', error);
+    res.status(500).json({ success: false, message: error.message || 'Failed to credit wallet.' });
   }
 });
 
@@ -2885,6 +2938,32 @@ app.delete('/api/admin/quizzes/:quizId', authenticateToken, authenticateAdmin, a
   }
 });
 
+app.get('/api/quiz/wallet', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.role !== 'learner') {
+      return res.status(403).json({ success: false, message: 'Learner access required.' });
+    }
+
+    const { error: refundError } = await supabase.rpc('refund_expired_quiz_attempts', {
+      p_learner_id: req.user.id,
+    });
+    if (refundError) throw refundError;
+
+    const { data: wallet, error } = await supabase
+      .from('learner_quiz_wallets')
+      .select('balance_mwk')
+      .eq('learner_id', req.user.id)
+      .maybeSingle();
+
+    if (error) throw error;
+
+    res.json({ success: true, balance_mwk: Number(wallet?.balance_mwk || 0), quiz_price_mwk: 100 });
+  } catch (error) {
+    console.error('Error fetching learner quiz wallet:', error);
+    res.status(500).json({ success: false, message: 'Could not load quiz wallet balance.' });
+  }
+});
+
 // Get all active quizzes for learners (filtered by form)
 app.get('/api/quiz/quizzes', authenticateToken, async (req, res) => {
   res.set('Cache-Control', 'no-store');
@@ -3005,6 +3084,11 @@ app.get('/api/quiz/quizzes', authenticateToken, async (req, res) => {
 // Get quiz questions for learners
 app.get('/api/quiz/:quizId/questions', authenticateToken, async (req, res) => {
   try {
+    const { error: refundError } = await supabase.rpc('refund_expired_quiz_attempts', {
+      p_learner_id: req.user.id,
+    });
+    if (refundError) throw refundError;
+
     const resolved = resolveQuizRouteId(req.params.quizId);
     if (!resolved.ok) {
       return res.status(400).json({ success: false, message: resolved.message });
@@ -3062,6 +3146,8 @@ app.get('/api/quiz/:quizId/questions', authenticateToken, async (req, res) => {
         .select('id, status, score, earned_points, total_points, passed, answers')
         .eq('learner_id', req.user.id)
         .eq('quiz_id', numericQuizId)
+        .order('started_at', { ascending: false })
+        .limit(1)
         .maybeSingle(),
     ]);
     const { data: questions, error: questionsError } = questionsResult;
@@ -3075,8 +3161,7 @@ app.get('/api/quiz/:quizId/questions', authenticateToken, async (req, res) => {
 
     const { data: existingAttempt, error: attemptError } = attemptResult;
     if (attemptError) {
-      console.error('Attempt fetch error:', attemptError);
-      // Non-critical, continue without saved answers
+      throw attemptError;
     }
 
     if (existingAttempt && existingAttempt.status === 'completed') {
@@ -3091,10 +3176,31 @@ app.get('/api/quiz/:quizId/questions', authenticateToken, async (req, res) => {
       });
     }
 
-    let savedAnswers = null;
-    if (existingAttempt && existingAttempt.status === 'in-progress') {
-      savedAnswers = existingAttempt.answers;
+    if (!existingAttempt || existingAttempt.status !== 'in-progress') {
+      return res.status(402).json({
+        success: false,
+        message: 'Start this quiz with a Mk100 wallet credit before opening its questions.',
+      });
     }
+
+    const { data: debit, error: debitError } = await supabase
+      .from('learner_quiz_wallet_transactions')
+      .select('id')
+      .eq('learner_id', req.user.id)
+      .eq('attempt_id', String(existingAttempt.id))
+      .eq('transaction_type', 'quiz_debit')
+      .maybeSingle();
+
+    if (debitError) throw debitError;
+    if (!debit) {
+      return res.status(402).json({
+        success: false,
+        message: 'A Mk100 wallet credit is required to open this quiz.',
+      });
+    }
+
+    let savedAnswers = null;
+    savedAnswers = existingAttempt.answers;
 
     res.json({
       success: true,
@@ -3118,7 +3224,7 @@ app.get('/api/quiz/:quizId/questions', authenticateToken, async (req, res) => {
 // Start a quiz attempt
 app.post('/api/quiz/:quizId/start', authenticateToken, async (req, res) => {
   try {
-    const quizId = req.params.quizId; // UUID string
+    const quizId = req.params.quizId;
 
     const [quizResult, learnerResult] = await Promise.all([
       supabase
@@ -3151,65 +3257,43 @@ app.post('/api/quiz/:quizId/start', authenticateToken, async (req, res) => {
       });
     }
 
-    // Resume an active attempt and count every attempt, including prior retakes.
-    const { data: existingAttempts, error: attemptsError } = await supabase
-      .from('quiz_attempts')
-      .select('id, status')
-      .eq('learner_id', req.user.id)
-      .eq('quiz_id', quizId);
+    const { data: startResult, error: startError } = await supabase.rpc('start_paid_quiz_attempt', {
+      p_learner_id: req.user.id,
+      p_quiz_id: String(quizId),
+      p_total_marks: quiz.total_marks || 0,
+      p_subject: quiz.subject?.name || null,
+    });
+    if (startError) throw startError;
 
-    if (attemptsError) throw attemptsError;
-
-    const attempts = existingAttempts || [];
-    const inProgressAttempt = attempts.find(attempt => attempt.status === 'in-progress');
-    if (inProgressAttempt) {
-      return res.json({
-        success: true,
-        attempt_id: inProgressAttempt.id,
-        attempts_used: attempts.length,
-        attempts_remaining: Math.max(0, 2 - attempts.length),
-        message: 'Resuming...'
+    if (startResult.status === 'insufficient_balance') {
+      return res.status(402).json({
+        success: false,
+        message: `Your quiz wallet has Mk${startResult.balance_mwk}. Add at least Mk100 to start a new attempt.`,
+        balance_mwk: startResult.balance_mwk,
+        required_mwk: 100,
       });
     }
-
-    if (attempts.length >= 2) {
+    if (startResult.status === 'attempt_limit') {
       return res.status(403).json({
         success: false,
         message: 'You have used both attempts allowed for this quiz.',
-        attempts_used: attempts.length,
+        attempts_used: startResult.attempts_used,
         attempts_remaining: 0,
-        max_attempts: 2
+        max_attempts: 2,
       });
     }
-
-    // 3. Insert new attempt
-    const { data: attempt, error: insertError } = await supabase
-      .from('quiz_attempts')
-      .insert({
-        learner_id: req.user.id,
-        quiz_id: quizId,
-        total_marks: quiz.total_marks || 0,
-        total_points: quiz.total_marks || 0,
-        status: 'in-progress',
-        started_at: new Date().toISOString(),
-        subject_id: quiz.subject_id || null,
-        subject: quiz.subject?.name || null
-      })
-      .select()
-      .single();
-
-    if (insertError) {
-      console.error('Insert error:', insertError);
-      return res.status(500).json({ success: false, message: insertError.message });
+    if (startResult.status === 'quiz_not_found') {
+      return res.status(404).json({ success: false, message: 'Quiz not found' });
     }
 
     res.json({
       success: true,
-      attempt_id: attempt.id,
-      attempts_used: attempts.length + 1,
-      attempts_remaining: Math.max(0, 1 - attempts.length),
+      attempt_id: startResult.attempt_id,
+      attempts_used: startResult.attempts_used,
+      attempts_remaining: startResult.attempts_remaining,
       max_attempts: 2,
-      message: 'Quiz started successfully',
+      balance_mwk: startResult.balance_mwk,
+      message: startResult.status === 'resumed' ? 'Resuming...' : 'Quiz started successfully',
       quiz: { total_marks: quiz.total_marks, passing_marks: quiz.passing_points }
     });
   } catch (error) {
@@ -3221,6 +3305,11 @@ app.post('/api/quiz/:quizId/start', authenticateToken, async (req, res) => {
 // Save answer during quiz (AUTO-SAVE)
 app.post('/api/quiz/:quizId/save-answer', authenticateToken, async (req, res) => {
   try {
+    const { error: refundError } = await supabase.rpc('refund_expired_quiz_attempts', {
+      p_learner_id: req.user.id,
+    });
+    if (refundError) throw refundError;
+
     const resolved = resolveQuizRouteId(req.params.quizId);
     if (!resolved.ok) {
       return res.status(400).json({ success: false, message: resolved.message });
@@ -3241,9 +3330,8 @@ app.post('/api/quiz/:quizId/save-answer', authenticateToken, async (req, res) =>
         .eq('status', 'in-progress')
         .maybeSingle();
       
-      if (!error && data) {
-        attempt = data;
-      }
+      if (error) throw error;
+      if (data) attempt = data;
     }
     
     if (!attempt) {
@@ -3255,16 +3343,28 @@ app.post('/api/quiz/:quizId/save-answer', authenticateToken, async (req, res) =>
         .eq('status', 'in-progress')
         .maybeSingle();
       
-      if (!error && data) {
-        attempt = data;
-      }
+      if (error) throw error;
+      if (data) attempt = data;
     }
     
     if (!attempt) {
-      return res.status(404).json({
+      return res.status(403).json({
         success: false,
-        message: 'No active quiz attempt found'
+        message: 'No paid active quiz attempt found.'
       });
+    }
+
+    const { data: debit, error: debitError } = await supabase
+      .from('learner_quiz_wallet_transactions')
+      .select('id')
+      .eq('learner_id', req.user.id)
+      .eq('attempt_id', String(attempt.id))
+      .eq('transaction_type', 'quiz_debit')
+      .maybeSingle();
+
+    if (debitError) throw debitError;
+    if (!debit) {
+      return res.status(402).json({ success: false, message: 'A Mk100 wallet credit is required for this attempt.' });
     }
     
     let currentAnswers = attempt.answers || {};
@@ -3318,6 +3418,11 @@ const getSuggestedAnswerSet = (answerKey) => String(answerKey || '')
 
 app.post('/api/quiz/:quizId/submit', authenticateToken, async (req, res) => {
   try {
+    const { error: refundError } = await supabase.rpc('refund_expired_quiz_attempts', {
+      p_learner_id: req.user.id,
+    });
+    if (refundError) throw refundError;
+
     const resolved = resolveQuizRouteId(req.params.quizId);
     if (!resolved.ok) {
       return res.status(400).json({ success: false, message: resolved.message });
@@ -3342,6 +3447,19 @@ app.post('/api/quiz/:quizId/submit', authenticateToken, async (req, res) => {
 
     if (attemptError || !attempt) {
       return res.status(404).json({ success: false, message: 'No active attempt found' });
+    }
+
+    const { data: debit, error: debitError } = await supabase
+      .from('learner_quiz_wallet_transactions')
+      .select('id')
+      .eq('learner_id', learnerId)
+      .eq('attempt_id', String(attempt.id))
+      .eq('transaction_type', 'quiz_debit')
+      .maybeSingle();
+
+    if (debitError) throw debitError;
+    if (!debit) {
+      return res.status(402).json({ success: false, message: 'A Mk100 wallet credit is required to submit this attempt.' });
     }
 
     // Fetch quiz questions (needed to store the answers structure)
