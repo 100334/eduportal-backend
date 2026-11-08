@@ -1228,7 +1228,7 @@ app.post('/api/admin/learners/:learnerId/quiz-wallet/credit', authenticateToken,
       return res.status(400).json({ success: false, message: 'Invalid learner ID.' });
     }
     if (!Number.isSafeInteger(amountMwk) || amountMwk <= 0 || amountMwk > 1000000000) {
-      return res.status(400).json({ success: false, message: 'Credit must be a positive whole number of Mk, up to Mk1,000,000,000.' });
+      return res.status(400).json({ success: false, message: 'Credit must be a positive whole number of MK, up to MK1,000,000,000.' });
     }
     if (!reason || reason.length > 200) {
       return res.status(400).json({ success: false, message: 'Enter a reason of 1 to 200 characters.' });
@@ -1246,7 +1246,7 @@ app.post('/api/admin/learners/:learnerId/quiz-wallet/credit', authenticateToken,
     res.json({
       success: true,
       balance_mwk: Number(data.balance_mwk),
-      message: `Mk${amountMwk} credit added.`,
+      message: `MK${amountMwk} credit added.`,
     });
   } catch (error) {
     console.error('Error crediting learner quiz wallet:', error);
@@ -3179,7 +3179,7 @@ app.get('/api/quiz/:quizId/questions', authenticateToken, async (req, res) => {
     if (!existingAttempt || existingAttempt.status !== 'in-progress') {
       return res.status(402).json({
         success: false,
-        message: 'Start this quiz with a Mk100 wallet credit before opening its questions.',
+        message: 'Start this quiz with a MK100 wallet credit before opening its questions.',
       });
     }
 
@@ -3195,7 +3195,7 @@ app.get('/api/quiz/:quizId/questions', authenticateToken, async (req, res) => {
     if (!debit) {
       return res.status(402).json({
         success: false,
-        message: 'A Mk100 wallet credit is required to open this quiz.',
+        message: 'A MK100 wallet credit is required to open this quiz.',
       });
     }
 
@@ -3268,7 +3268,7 @@ app.post('/api/quiz/:quizId/start', authenticateToken, async (req, res) => {
     if (startResult.status === 'insufficient_balance') {
       return res.status(402).json({
         success: false,
-        message: `Your quiz wallet has Mk${startResult.balance_mwk}. Add at least Mk100 to start a new attempt.`,
+        message: `Your quiz wallet has MK${startResult.balance_mwk}. Add at least MK100 to start a new attempt.`,
         balance_mwk: startResult.balance_mwk,
         required_mwk: 100,
       });
@@ -3364,7 +3364,7 @@ app.post('/api/quiz/:quizId/save-answer', authenticateToken, async (req, res) =>
 
     if (debitError) throw debitError;
     if (!debit) {
-      return res.status(402).json({ success: false, message: 'A Mk100 wallet credit is required for this attempt.' });
+      return res.status(402).json({ success: false, message: 'A MK100 wallet credit is required for this attempt.' });
     }
     
     let currentAnswers = attempt.answers || {};
@@ -3459,7 +3459,7 @@ app.post('/api/quiz/:quizId/submit', authenticateToken, async (req, res) => {
 
     if (debitError) throw debitError;
     if (!debit) {
-      return res.status(402).json({ success: false, message: 'A Mk100 wallet credit is required to submit this attempt.' });
+      return res.status(402).json({ success: false, message: 'A MK100 wallet credit is required to submit this attempt.' });
     }
 
     // Fetch quiz questions (needed to store the answers structure)
