@@ -1180,11 +1180,6 @@ app.delete('/api/admin/classes/:classId', authenticateToken, authenticateAdmin, 
 // Get all learners
 app.get('/api/admin/learners', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
-    const { error: refundError } = await supabase.rpc('refund_expired_quiz_attempts', {
-      p_learner_id: null,
-    });
-    if (refundError) throw refundError;
-
     const [{ data: learners, error }, { data: wallets, error: walletError }] = await Promise.all([
       supabase
         .from('learners')
