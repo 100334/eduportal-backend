@@ -2943,11 +2943,6 @@ app.get('/api/quiz/wallet', authenticateToken, async (req, res) => {
       return res.status(403).json({ success: false, message: 'Learner access required.' });
     }
 
-    const { error: refundError } = await supabase.rpc('refund_expired_quiz_attempts', {
-      p_learner_id: req.user.id,
-    });
-    if (refundError) throw refundError;
-
     const { data: wallet, error } = await supabase
       .from('learner_quiz_wallets')
       .select('balance_mwk')
