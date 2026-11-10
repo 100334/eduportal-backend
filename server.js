@@ -1189,19 +1189,23 @@ app.get('/api/admin/learners', authenticateToken, authenticateAdmin, async (req,
     ]);
 
     if (error) throw error;
-    if (walletError) throw walletError;
+    if (walletError) {
+      console.error('Error fetching learner quiz wallet balances:', walletError);
+    }
 
-    const walletBalances = new Map(
-      (wallets || []).map(wallet => [wallet.learner_id, Number(wallet.balance_mwk)])
-    );
+    const walletBalances = new Map((wallets || []).map(wallet => [
+      wallet.learner_id,
+      Number(wallet.balance_mwk),
+    ]));
     const learnersWithWallets = (learners || []).map(learner => ({
       ...learner,
-      wallet_balance_mwk: walletBalances.get(learner.id) || 0,
+      wallet_balance_mwk: walletError ? null : (walletBalances.get(learner.id) ?? 0),
     }));
     
     res.json({
       success: true,
-      learners: learnersWithWallets
+      learners: learnersWithWallets,
+      wallet_available: !walletError,
     });
   } catch (err) {
     console.error('Error fetching learners:', err);
