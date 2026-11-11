@@ -3503,7 +3503,9 @@ app.post('/api/quiz/:quizId/submit', authenticateToken, async (req, res) => {
     const { data: questions, error: qError } = await supabase
       .from('quiz_questions')
       .select('id, question_text, question_image, option_images, answer_image, question_type, marks, options, correct_answer, expected_answer, explanation')
-      .eq('quiz_id', quizId);
+      .eq('quiz_id', quizId)
+      .order('display_order', { ascending: true })
+      .order('created_at', { ascending: true });
 
     if (qError) throw qError;
 
