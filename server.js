@@ -11,6 +11,7 @@ const path = require('path');
 const fs = require('fs').promises;
 const crypto = require('crypto');
 const uploadRoutes = require('./routes/upload');
+const calculateQuizLeaderboard = require('./utils/quizLeaderboard');
 
 // ============================================
 // DATABASE MIGRATION NOTES (run once)
@@ -2806,6 +2807,48 @@ app.put('/api/admin/quizzes/:quizId/questions/:questionId', authenticateToken, a
 });
 
 // NEW: Delete a question (admin)
+app.delete('/api/admin/quizzes/:quizId/questions', authenticateToken, authenticateAdmin, async (req, res) => {
+  try {
+    const { quizId } = req.params;
+
+    const { data: quiz, error: quizError } = await supabase
+      .from('quizzes')
+      .select('id')
+      .eq('id', quizId)
+      .maybeSingle();
+
+    if (quizError) throw quizError;
+    if (!quiz) {
+      return res.status(404).json({ success: false, message: 'Quiz not found' });
+    }
+
+    const { data: deletedQuestions, error: deleteError } = await supabase
+      .from('quiz_questions')
+      .delete()
+      .eq('quiz_id', quizId)
+      .select('id');
+
+    if (deleteError) throw deleteError;
+
+    await recalculateQuizMarks(quizId);
+    await logAdminAction(
+      req.user.id,
+      'DELETE_ALL_QUESTIONS',
+      `Deleted all ${deletedQuestions.length} questions from quiz ${quizId}`,
+      req.ip
+    );
+
+    res.json({
+      success: true,
+      message: 'All questions deleted',
+      deleted_count: deletedQuestions.length,
+    });
+  } catch (err) {
+    console.error('Error deleting all quiz questions:', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 app.delete('/api/admin/quizzes/:quizId/questions/:questionId', authenticateToken, authenticateAdmin, async (req, res) => {
   try {
     const { quizId, questionId } = req.params;
@@ -7723,14 +7766,14 @@ app.post('/api/admin/r2-upload-url', authenticateToken, authenticateAdmin, async
 });
 
 // ============================================
-// LEADERBOARD ENDPOINT – BASED ONLY ON REPORT CARDS
+// LEADERBOARD ENDPOINT – AVERAGE COMPLETED QUIZ PERCENTAGE
 // ============================================
 app.get('/api/learner/leaderboard', authenticateToken, async (req, res) => {
   try {
-    const { class_id, form, limit = 10, term, assessment_type_id } = req.query;
+    const { class_id, form, limit = 10 } = req.query;
     const currentUserId = req.user.id;
 
-    console.log(`🏆 Fetching leaderboard (report cards only) for user: ${currentUserId}`);
+    console.log(`🏆 Fetching quiz leaderboard for user: ${currentUserId}`);
 
     // Get current learner's info
     const { data: currentLearner, error: learnerError } = await supabase
@@ -7764,101 +7807,52 @@ app.get('/api/learner/leaderboard', authenticateToken, async (req, res) => {
       .eq('is_accepted_by_teacher', true)
       .order('name', { ascending: true });
 
-    if (learnersError || !learners || learners.length === 0) {
+    if (learnersError) throw learnersError;
+
+    if (!learners || learners.length === 0) {
       return res.json({
         success: true,
         leaderboard: [],
         current_user_rank: null,
+        total_participants: 0,
+        class_participants: 0,
+        metric: 'average_completed_quiz_percentage',
         message: 'No learners found in this class/form'
       });
     }
 
     const learnerIds = learners.map(l => l.id);
+    const { data: completedAttempts, error: attemptsError } = await supabase
+      .from('quiz_attempts')
+      .select('learner_id, earned_points, total_points, percentage')
+      .in('learner_id', learnerIds)
+      .eq('status', 'completed');
 
-    // Calculate report card average for each learner
-    const leaderboardData = await Promise.all(learners.map(async (learner) => {
-      // Fetch reports, optionally filtered by term / assessment_type_id
-      let reportsQuery = supabase
-        .from('reports')
-        .select('average_score, total_points')
-        .eq('learner_id', learner.id);
+    if (attemptsError) throw attemptsError;
 
-      if (term)               reportsQuery = reportsQuery.eq('term', term);
-      if (assessment_type_id) reportsQuery = reportsQuery.eq('assessment_type_id', assessment_type_id);
-
-      const { data: reports, error: reportsError } = await reportsQuery;
-
-      let averageScore = 0;
-      let totalPoints  = null;
-      let reportCount  = 0;
-
-      if (!reportsError && reports && reports.length > 0) {
-        const totalScore = reports.reduce((sum, r) => sum + (r.average_score || 0), 0);
-        averageScore = totalScore / reports.length;
-        reportCount  = reports.length;
-        // For upper form: use aggregate points (lower = better)
-        const hasPoints = reports.some(r => r.total_points != null);
-        if (hasPoints) {
-          totalPoints = Math.round(
-            reports.reduce((sum, r) => sum + (r.total_points || 0), 0) / reports.length
-          );
-        }
-      }
-
-      return {
-        id: learner.id,
-        name: learner.name,
-        reg_number: learner.reg_number,
-        form: learner.form,
-        average_score: Math.round(averageScore * 100) / 100,
-        total_points: totalPoints,
-        report_count: reportCount
-      };
-    }));
-
-    // Sort: upper form → points ascending (lower = better); lower form → score descending
-    const isUpperForm = targetForm === 'Form 3' || targetForm === 'Form 4';
-    const hasPointsData = leaderboardData.some(l => l.total_points != null);
-
-    if (isUpperForm && hasPointsData) {
-      // Sort by points ascending (1 = Distinction is best); learners without points go to end
-      leaderboardData.sort((a, b) => {
-        if (a.total_points == null) return 1;
-        if (b.total_points == null) return -1;
-        return a.total_points - b.total_points;
-      });
-    } else {
-      leaderboardData.sort((a, b) => b.average_score - a.average_score);
-    }
-
-    // Assign ranks (tied scores share the same rank)
-    let currentRank = 1;
-    leaderboardData.forEach((item, index) => {
-      if (index > 0) {
-        const prev = leaderboardData[index - 1];
-        const sameScore = isUpperForm && hasPointsData
-          ? item.total_points === prev.total_points
-          : item.average_score === prev.average_score;
-        if (!sameScore) currentRank = index + 1;
-      }
-      item.rank = currentRank;
-    });
+    const leaderboardData = calculateQuizLeaderboard(learners, completedAttempts || []);
 
     // Find current user's rank
-    const currentUserData = leaderboardData.find(item => item.id === currentUserId);
+    const currentUserData = leaderboardData.find(
+      item => String(item.id) === String(currentUserId)
+    );
     const currentUserRank = currentUserData ? currentUserData.rank : null;
 
     // Limit results if specified
-    const limitedResults = limit && limit > 0 ? leaderboardData.slice(0, parseInt(limit)) : leaderboardData;
+    const parsedLimit = Number.parseInt(limit, 10);
+    const limitedResults = Number.isFinite(parsedLimit) && parsedLimit > 0
+      ? leaderboardData.slice(0, parsedLimit)
+      : leaderboardData;
 
     res.json({
       success: true,
       leaderboard: limitedResults,
       current_user_rank: currentUserRank,
-      total_participants: learners.length,
+      total_participants: leaderboardData.length,
+      class_participants: learners.length,
       class_id: targetClassId,
       form: targetForm,
-      metric: 'report_card_average'
+      metric: 'average_completed_quiz_percentage'
     });
 
   } catch (error) {
