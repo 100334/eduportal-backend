@@ -2,10 +2,28 @@ const calculateQuizLeaderboard = (learners, completedAttempts) => {
   const pointsByLearner = new Map();
 
   completedAttempts.forEach((attempt) => {
-    if (attempt.earned_points === null || attempt.earned_points === undefined) return;
-
-    const earnedPoints = Number(attempt.earned_points);
-    if (!Number.isFinite(earnedPoints)) return;
+    let earnedPoints;
+    const percentage = Number(attempt.percentage);
+    const totalPoints = Number(attempt.total_points);
+    if (
+      attempt.percentage !== null &&
+      attempt.percentage !== undefined &&
+      attempt.total_points !== null &&
+      attempt.total_points !== undefined &&
+      Number.isFinite(percentage) &&
+      Number.isFinite(totalPoints) &&
+      totalPoints > 0
+    ) {
+      earnedPoints = (percentage / 100) * totalPoints;
+    } else if (
+      attempt.earned_points !== null &&
+      attempt.earned_points !== undefined &&
+      Number.isFinite(Number(attempt.earned_points))
+    ) {
+      earnedPoints = Number(attempt.earned_points);
+    } else {
+      return;
+    }
 
     const points = pointsByLearner.get(attempt.learner_id) || { total: 0, count: 0 };
     points.total += earnedPoints;

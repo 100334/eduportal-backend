@@ -7834,7 +7834,7 @@ app.get('/api/learner/leaderboard', authenticateToken, async (req, res) => {
     const learnerIds = learners.map(l => l.id);
     const { data: completedAttempts, error: attemptsError } = await supabase
       .from('quiz_attempts')
-      .select('learner_id, earned_points')
+      .select('learner_id, earned_points, total_points, percentage')
       .in('learner_id', learnerIds)
       .eq('status', 'completed');
 
