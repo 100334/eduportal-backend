@@ -7792,22 +7792,27 @@ app.get('/api/learner/leaderboard', authenticateToken, async (req, res) => {
     let targetClassId = class_id || currentLearner.class_id;
     let targetForm = form || currentLearner.form;
 
-    if (!targetClassId) {
+    if (!targetForm) {
       return res.status(400).json({
         success: false,
-        message: 'No class specified and learner not assigned to a class'
+        message: 'Learner is not assigned to a form'
       });
     }
 
-    // Get all active, accepted learners in the target class/form
-    const { data: learners, error: learnersError } = await supabase
+    // When no class is assigned, compare the learner with others in the same form.
+    let learnersQuery = supabase
       .from('learners')
       .select('id, name, reg_number, form, class_id')
-      .eq('class_id', targetClassId)
       .eq('form', targetForm)
       .eq('status', 'Active')
       .eq('is_accepted_by_teacher', true)
       .order('name', { ascending: true });
+
+    if (targetClassId) {
+      learnersQuery = learnersQuery.eq('class_id', targetClassId);
+    }
+
+    const { data: learners, error: learnersError } = await learnersQuery;
 
     if (learnersError) throw learnersError;
 
@@ -7818,6 +7823,9 @@ app.get('/api/learner/leaderboard', authenticateToken, async (req, res) => {
         current_user_rank: null,
         total_participants: 0,
         class_participants: 0,
+        class_id: targetClassId || null,
+        form: targetForm,
+        scope: targetClassId ? 'class' : 'form',
         metric: 'total_completed_quiz_points',
         message: 'No learners found in this class/form'
       });
@@ -7852,8 +7860,9 @@ app.get('/api/learner/leaderboard', authenticateToken, async (req, res) => {
       current_user_rank: currentUserRank,
       total_participants: leaderboardData.length,
       class_participants: learners.length,
-      class_id: targetClassId,
+      class_id: targetClassId || null,
       form: targetForm,
+      scope: targetClassId ? 'class' : 'form',
       metric: 'total_completed_quiz_points'
     });
 
