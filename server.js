@@ -7834,13 +7834,43 @@ app.get('/api/learner/leaderboard', authenticateToken, async (req, res) => {
     const learnerIds = learners.map(l => l.id);
     const { data: completedAttempts, error: attemptsError } = await supabase
       .from('quiz_attempts')
-      .select('learner_id, earned_points, total_points, percentage')
+      .select('learner_id, quiz_id, earned_points, total_points, percentage')
       .in('learner_id', learnerIds)
-      .eq('status', 'completed');
+      .in('status', ['completed', 'submitted']);
 
     if (attemptsError) throw attemptsError;
 
-    const leaderboardData = calculateQuizLeaderboard(learners, completedAttempts || []);
+    const attempts = completedAttempts || [];
+    const quizIdsMissingTotals = [...new Set(
+      attempts
+        .filter(attempt =>
+          !(Number(attempt.total_points) > 0) &&
+          attempt.percentage !== null &&
+          attempt.percentage !== undefined &&
+          attempt.quiz_id !== null &&
+          attempt.quiz_id !== undefined
+        )
+        .map(attempt => attempt.quiz_id)
+    )];
+
+    let quizTotalsById = new Map();
+    if (quizIdsMissingTotals.length > 0) {
+      const { data: quizzes, error: quizzesError } = await supabase
+        .from('quizzes')
+        .select('id, total_marks')
+        .in('id', quizIdsMissingTotals);
+
+      if (quizzesError) throw quizzesError;
+      quizTotalsById = new Map(
+        (quizzes || []).map(quiz => [String(quiz.id), quiz.total_marks])
+      );
+    }
+
+    const attemptsWithQuizTotals = attempts.map(attempt => ({
+      ...attempt,
+      quiz_total_points: quizTotalsById.get(String(attempt.quiz_id)),
+    }));
+    const leaderboardData = calculateQuizLeaderboard(learners, attemptsWithQuizTotals);
 
     // Find current user's rank
     const currentUserData = leaderboardData.find(

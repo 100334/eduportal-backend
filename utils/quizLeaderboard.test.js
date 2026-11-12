@@ -60,3 +60,18 @@ test('converts percentage to points when both percentage and earned points are p
 
   assert.equal(leaderboard[0].quiz_points, 17);
 });
+
+test('uses the quiz maximum to convert a historical attempt with no recorded total points', () => {
+  const leaderboard = calculateQuizLeaderboard(
+    [{ id: 1, name: 'Avery', reg_number: 'A1', form: 'Form 1' }],
+    [{
+      learner_id: 1,
+      earned_points: null,
+      total_points: 0,
+      quiz_total_points: 40,
+      percentage: 75,
+    }],
+  );
+
+  assert.equal(leaderboard[0].quiz_points, 30);
+});

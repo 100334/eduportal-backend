@@ -4,12 +4,15 @@ const calculateQuizLeaderboard = (learners, completedAttempts) => {
   completedAttempts.forEach((attempt) => {
     let earnedPoints;
     const percentage = Number(attempt.percentage);
-    const totalPoints = Number(attempt.total_points);
+    const recordedTotalPoints = Number(attempt.total_points);
+    const quizTotalPoints = Number(attempt.quiz_total_points);
+    const totalPoints =
+      Number.isFinite(recordedTotalPoints) && recordedTotalPoints > 0
+        ? recordedTotalPoints
+        : quizTotalPoints;
     if (
       attempt.percentage !== null &&
       attempt.percentage !== undefined &&
-      attempt.total_points !== null &&
-      attempt.total_points !== undefined &&
       Number.isFinite(percentage) &&
       Number.isFinite(totalPoints) &&
       totalPoints > 0
