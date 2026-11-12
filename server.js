@@ -7768,7 +7768,7 @@ app.post('/api/admin/r2-upload-url', authenticateToken, authenticateAdmin, async
 });
 
 // ============================================
-// LEADERBOARD ENDPOINT – AVERAGE COMPLETED QUIZ PERCENTAGE
+// LEADERBOARD ENDPOINT – TOTAL EARNED POINTS FROM COMPLETED QUIZZES
 // ============================================
 app.get('/api/learner/leaderboard', authenticateToken, async (req, res) => {
   try {
@@ -7818,7 +7818,7 @@ app.get('/api/learner/leaderboard', authenticateToken, async (req, res) => {
         current_user_rank: null,
         total_participants: 0,
         class_participants: 0,
-        metric: 'average_completed_quiz_percentage',
+        metric: 'total_completed_quiz_points',
         message: 'No learners found in this class/form'
       });
     }
@@ -7826,7 +7826,7 @@ app.get('/api/learner/leaderboard', authenticateToken, async (req, res) => {
     const learnerIds = learners.map(l => l.id);
     const { data: completedAttempts, error: attemptsError } = await supabase
       .from('quiz_attempts')
-      .select('learner_id, earned_points, total_points, percentage')
+      .select('learner_id, earned_points')
       .in('learner_id', learnerIds)
       .eq('status', 'completed');
 
@@ -7854,7 +7854,7 @@ app.get('/api/learner/leaderboard', authenticateToken, async (req, res) => {
       class_participants: learners.length,
       class_id: targetClassId,
       form: targetForm,
-      metric: 'average_completed_quiz_percentage'
+      metric: 'total_completed_quiz_points'
     });
 
   } catch (error) {
