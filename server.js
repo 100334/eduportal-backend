@@ -7805,7 +7805,6 @@ app.get('/api/learner/leaderboard', authenticateToken, async (req, res) => {
       .select('id, name, reg_number, form, class_id')
       .eq('form', targetForm)
       .eq('status', 'Active')
-      .eq('is_accepted_by_teacher', true)
       .order('name', { ascending: true });
 
     if (targetClassId) {
