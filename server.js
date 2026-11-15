@@ -3502,7 +3502,7 @@ app.post('/api/quiz/:quizId/submit', authenticateToken, async (req, res) => {
     // Fetch quiz questions (needed to store the answers structure)
     const { data: questions, error: qError } = await supabase
       .from('quiz_questions')
-      .select('id, question_text, question_image, option_images, answer_image, question_type, marks, options, correct_answer, expected_answer, explanation')
+      .select('id, question_text, question_image, option_images, answer_image, question_type, section, marks, options, correct_answer, expected_answer, explanation')
       .eq('quiz_id', quizId)
       .order('display_order', { ascending: true })
       .order('created_at', { ascending: true });
@@ -3541,6 +3541,8 @@ app.post('/api/quiz/:quizId/submit', authenticateToken, async (req, res) => {
         option_images: question.option_images || [],
         answer_image: question.answer_image || null,
         question_type: question.question_type,
+        section: question.section || 'A',
+        options: question.options || [],
         selected_answer: userAnswer,
         selected_answer_text: userAnswerText,
         is_correct: null,
@@ -3774,23 +3776,37 @@ app.get('/api/quiz/attempt/:attemptId', authenticateToken, async (req, res) => {
     }
     if (!Array.isArray(answers)) answers = [];
 
+    const { data: quizQuestions, error: questionLookupError } = await supabase
+      .from('quiz_questions')
+      .select('id, question_image, option_images, question_type, section, options')
+      .eq('quiz_id', attempt.quiz_id);
+    if (questionLookupError) throw questionLookupError;
+    const questionById = new Map((quizQuestions || []).map(question => [question.id, question]));
+
     // Format each answer
-    const formattedAnswers = answers.map((ans, idx) => ({
-      question_id: ans.question_id || idx,
-      question_text: ans.question_text || '',
-      question_image: ans.question_image || null,
-      option_images: ans.option_images || [],
-      answer_image: ans.answer_image || null,
-      question_type: ans.question_type || 'multiple_choice',
-      selected_answer: ans.selected_answer,
-      selected_answer_text: ans.selected_answer_text || 'Not answered',
-      is_correct: ans.is_correct || false,
-      points_obtained: ans.points_obtained || 0,
-      max_points: ans.max_points || 1,
-      correct_answer: ans.correct_answer || '',
-      explanation: ans.explanation || null,
-      feedback: ans.feedback || null
-    }));
+    const formattedAnswers = answers.map((ans, idx) => {
+      const question = questionById.get(ans.question_id);
+      return {
+        question_id: ans.question_id || idx,
+        question_text: ans.question_text || '',
+        question_image: ans.question_image || question?.question_image || null,
+        option_images: ans.option_images || question?.option_images || [],
+        answer_image: ans.answer_image || null,
+        question_type: ans.question_type || question?.question_type || 'multiple_choice',
+        section: ans.section || question?.section || 'A',
+        options: Array.isArray(ans.options) && ans.options.length
+          ? ans.options
+          : question?.options || [],
+        selected_answer: ans.selected_answer,
+        selected_answer_text: ans.selected_answer_text || 'Not answered',
+        is_correct: ans.is_correct || false,
+        points_obtained: ans.points_obtained || 0,
+        max_points: ans.max_points || 1,
+        correct_answer: ans.correct_answer || '',
+        explanation: ans.explanation || null,
+        feedback: ans.feedback || null
+      };
+    });
 
     res.json({
       success: true,
